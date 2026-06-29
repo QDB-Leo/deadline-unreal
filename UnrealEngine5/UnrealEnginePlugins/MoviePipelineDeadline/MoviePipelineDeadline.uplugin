@@ -40,5 +40,12 @@
 			"Name": "MoviePipelineDeadline",
 			"Type" : "UncookedOnly"
 		}
+	],
+	"PythonRequirements":
+	[ 
+		{ 
+		"Platform": "All",
+		"Requirements": [ "p4python==2025.2.2863679 --hash=sha256:d565bed80340cfcd8c5352cf8aa2e2c6ac736421fc61300530921419ea32194a"]
+		}
 	]
 }

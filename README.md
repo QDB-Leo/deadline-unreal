@@ -4,9 +4,15 @@ Deadline and Unreal plugins to send Unreal render jobs to Deadline.
 Improved version of the DwarfLabs code.
 This is still a WIP but helps me a lot. I'm using it with UE 5.6 and 5.7
 
-Major changes from DwarLabs version :
-- Supports MRG
-- Render progress tracking in Deadline Task
+Major changes from DwarfLabs version :
+- Supports MRG, retrieves correct resolution from either job override, node value or subgraph
+- Render progress tracking inside Deadline Task
+- Changed handling of P4 connection (ticket-based), syncs to head by default
+- FrameRange override support, so you can change framerange inside Deadline and requeue. Used in conjonction with a perforce change pushed to depot so you don't have to resubmit a job.
+
+Todo :
+- GPU crash detection
+
 
 Binaries for Unreal Plugins are provided as they can't be automatically generated as usual
 

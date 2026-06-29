@@ -1,3 +1,7 @@
+# Binaries
+As of now, binaries cannot compile easily when adding the plugins to a project, so Win Binaries are included for 5.7, until we find a solution
+
+
 # Deadline Unreal Engine Service plugin
 To use this plugin copy the `UnrealDeadlineService` and the `MoviePipelineDeadline` to the `Plugins` directory located in your Unreal Project's directory.
 

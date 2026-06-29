@@ -1,11 +1,14 @@
 # deadline-unreal
 Deadline and Unreal plugins to send Unreal render jobs to Deadline.
 
+Improved version of the DwarfLabs code.
+This is still a WIP but helps me a lot. I'm using it with UE 5.6 and 5.7
 
-Improved version of the default plugins provided with Deadline 10.3.1.3.
-Branch `main` is the unmodified code, and branch `dev` is our version.
+Major changes from DwarLabs version :
+- Supports MRG
+- Render progress tracking in Deadline Task
 
-We do not own any of it nor intend to actively maintain it.
+Binaries for Unreal Plugins are provided as they can't be automatically generated as usual
 
 Feel free to fork and improve it as you need :)
 

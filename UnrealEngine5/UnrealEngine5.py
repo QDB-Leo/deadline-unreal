@@ -70,6 +70,9 @@ class UnrealEnginePlugin(DeadlinePlugin):
         # Keep track of when Job Ended has been called
         self._job_ended = False
 
+        # GPU crash detection
+        self._gpu_crashed = False
+
         # set the plugin to commandline mode by default. This will launch the
         # editor and wait for the process to exit. There is no communication
         # with the deadline process.
@@ -117,7 +120,7 @@ class UnrealEnginePlugin(DeadlinePlugin):
         if self._commandline_mode:
             return
 
-        self.LogInfo("Executing Start Job")
+        self.LogInfo("Executing Start Job - Setup RPC Manager")
 
         # Get and set up the RPC manager for the plugin
         self._deadline_rpc_manager = self._setup_rpc_manager()
@@ -126,7 +129,7 @@ class UnrealEnginePlugin(DeadlinePlugin):
         self.unreal_managed_process = UnrealEngineManagedProcess(
             self._unreal_process_name, self, self._deadline_rpc_manager
         )
-        self.LogInfo("Done executing Start Job")
+        self.LogInfo("Done executing Start Job - Setup RPC Manager")
 
     def _setup_rpc_manager(self):
         """
@@ -184,6 +187,10 @@ class UnrealEnginePlugin(DeadlinePlugin):
 
             # Start next tasks
             self.LogWarning(f"Starting Task {self.GetCurrentTaskId()}")
+
+            if self._gpu_crashed:
+                self.FailRender("Failing job after GPU crash.")
+                return
 
             # Account for any re-queued jobs. Deadline will immediately execute
             # render tasks if a job has been re-queued on the same process. If
@@ -318,6 +325,18 @@ class UnrealEnginePlugin(DeadlinePlugin):
                     error_regex
                 ).HandleCallback += process._handle_stdout_error
 
+        # GPU crash: UE5 patterns (D3D12 / DXGI device removed/hung)
+        gpu_crash_regex = (
+            r"(GPU crash detected"
+            r"|GPU crashed or D3D device removed"
+            r"|D3D device being lost"
+            r"|DXGI_ERROR_DEVICE_(REMOVED|HUNG)"
+            r"|GPU Crash dump Triggered)"
+        )
+        process.AddStdoutHandlerCallback(
+            gpu_crash_regex
+        ).HandleCallback += process._handle_gpu_crash
+
     def generic_handle_progress(self, process):
         """
         Handles any progress reports.
@@ -325,6 +344,59 @@ class UnrealEnginePlugin(DeadlinePlugin):
         # handle floating progress using comma as decimal separator
         progress = float(process.GetRegexMatch(1).replace(",", "."))
         self.SetProgress(progress)
+
+    def flag_gpu_crash(self):
+        self._gpu_crashed = True
+
+    def record_last_rendered_frame(self, since_epoch=None, window_minutes=15):
+        """
+        Writes lastframerendered + lastframerenderedtime into the job's ExtraInfo.
+        Source of truth = the disk. We only keep files written since the start
+        of the session (since_epoch), so we don't confuse them with an old
+        version of an overwritten shot.
+        """
+        job = self.GetJob()
+        output_dir = job.GetJobExtraInfoKeyValue("output_directory_override")
+        if not output_dir or not os.path.isdir(output_dir):
+            self.LogWarning(f"[GPU crash] output dir not found: {output_dir}")
+            return None
+
+        # Time anchor: session start if known (- margin), otherwise a sliding window
+        if since_epoch is not None:
+            threshold = since_epoch - 120  # 2 min margin
+        else:
+            threshold = time.time() - window_minutes * 60
+
+        last_frame = None
+        last_mtime = None
+        for root, _, files in os.walk(output_dir):
+            for name in files:
+                path = os.path.join(root, name)
+                try:
+                    mtime = os.path.getmtime(path)
+                except OSError:
+                    continue
+                if mtime < threshold:
+                    continue  # older version, ignore
+
+                tail = os.path.splitext(name)[0][-4:]  # frame = 4 last chars
+                if not tail.isdigit():
+                    continue
+                frame = int(tail)
+                if last_frame is None or frame > last_frame:
+                    last_frame = frame
+                    last_mtime = mtime
+
+        if last_frame is None:
+            self.LogWarning("[GPU crash] no recent frame found on disk.")
+            return None
+
+        iso = datetime.fromtimestamp(last_mtime).isoformat()
+        job.SetJobExtraInfoKeyValue("lastframerendered", str(last_frame))
+        job.SetJobExtraInfoKeyValue("lastframerenderedtime", iso)
+        RepositoryUtils.SaveJob(job)
+        self.LogInfo(f"[GPU crash] lastframerendered={last_frame} (mtime={iso})")
+        return last_frame
 
 
 class UnrealEngineManagedProcess(ManagedProcess):
@@ -437,6 +509,34 @@ class UnrealEngineManagedProcess(ManagedProcess):
         """
         self._deadline_plugin.FailRender(self.GetRegexMatch(0))
 
+    def _handle_gpu_crash(self):
+        line = self.GetRegexMatch(0)
+        plugin = self._deadline_plugin
+        plugin.LogWarning(f"=== GPU CRASH detected ===\n{line}")
+
+        # 1. Record the last OK frame (from disk)
+        try:
+            last = plugin.record_last_rendered_frame(
+                since_epoch=getattr(self, "_render_start_time", None)
+            )
+        except Exception as e:
+            plugin.LogWarning(f"Failed to record lastframe: {e}")
+            last = None
+
+        # 2. Mark ONLY this task as terminal Failed (no requeue).
+        #    The other tasks keep the job's default retry behavior.
+        try:
+            job = plugin.GetJob()
+            task = plugin.GetCurrentTask()
+            RepositoryUtils.FailTasks(job, [task])
+            RepositoryUtils.SaveJob(job)
+            plugin.LogInfo(f"Task {task.TaskId} → Failed (GPU crash).")
+        except Exception as e:
+            plugin.LogWarning(f"Could not mark the task as Failed: {e}")
+
+        # 3. Exit the is_task_complete loop and end the plugin processing.
+        plugin.FailRender(f"GPU crash — last OK frame: {last}.\n{line}")
+
     def _handle_progress(self):
         """
         Handles any progress reports
@@ -454,6 +554,7 @@ class UnrealEngineManagedProcess(ManagedProcess):
 
         # Start a timer to monitor the process time
         start_time = time.time()
+        self._render_start_time = start_time
 
         # Get temp client connection
         if not self._temp_rpc_client:

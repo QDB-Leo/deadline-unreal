@@ -7,7 +7,7 @@ logger = logging.getLogger("DeadlineHTTP")
 try:
     # Third-party
     from urllib.parse import urljoin
-    from urllib3 import PoolManager
+    from urllib3.poolmanager import PoolManager
     from urllib3.exceptions import HTTPError
 except ImportError:
     logger.info("module 'urllib3' not found")

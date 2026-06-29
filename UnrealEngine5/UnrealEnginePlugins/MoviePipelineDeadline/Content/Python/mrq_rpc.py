@@ -7,6 +7,7 @@ import json
 import unreal
 
 from deadline_rpc import BaseRPC
+from deadline_progress_executor import DeadlineProgressExecutor, register_proxy
 
 from mrq_cli_modes import (
     render_queue_manifest,
@@ -149,6 +150,16 @@ class MRQRender(BaseRPC):
             return
 
         shots = current_task_data.split(",")
+        unreal.log_warning(f"---------- Rendering shots: {shots} ----------")
+
+        # Read the (possibly overridden) frame range for this task.
+        frame_range_override = None
+        try:
+            start, end = self.proxy.get_task_frames()
+            frame_range_override = (int(start), int(end))
+            unreal.log(f"Task frame range from Deadline: {start}-{end}")
+        except Exception as err:
+            unreal.log_warning(f"Could not read task frames from Deadline: {err}")
 
         if self._get_queue():
             return self.render_queue(
@@ -163,7 +174,8 @@ class MRQRender(BaseRPC):
                 self._get_serialized_pipeline(),
                 shots,
                 output_dir_override=output_dir if output_dir else None,
-                filename_format_override=filename_format if filename_format else None
+                filename_format_override=filename_format if filename_format else None,
+                frame_range_override=frame_range_override
             )
 
         if self._get_sequence_data():
@@ -229,7 +241,8 @@ class MRQRender(BaseRPC):
         manifest_file,
         shots,
         output_dir_override=None,
-        filename_format_override=None
+        filename_format_override=None,
+        frame_range_override=None
     ):
         """
         Executes a render using a manifest file
@@ -238,6 +251,7 @@ class MRQRender(BaseRPC):
         :param list shots: Shots to render
         :param str output_dir_override: Movie Pipeline output directory
         :param str filename_format_override: Movie Pipeline filename format override
+        :param tuple frame_range_override: Frame range override (start, end) from Deadline
         """
         unreal.log(f"Rendering shots: {shots}")
 
@@ -263,7 +277,8 @@ class MRQRender(BaseRPC):
             user=self.proxy.get_job_user(),
             executor_instance=executor,
             output_dir_override=output_dir_override,
-            output_filename_override=filename_format_override
+            output_filename_override=filename_format_override,
+            frame_range_override=frame_range_override
         )
 
     def render_sequence(
@@ -318,14 +333,22 @@ class MRQRender(BaseRPC):
             output_filename_override=filename_format_override
         )
 
-    @staticmethod
-    def _get_executor_instance():
+    def _get_executor_instance(self):
         """
-        Gets an instance of the movie pipeline executor
+        Gets the progress-reporting executor and registers the Deadline proxy
+        so on_begin_frame can report progress back to the Monitor.
 
-        :return: Movie Pipeline Executor instance
+        IMPORTANT: stored on self to keep the Python wrapper alive for the
+        whole render (async). Without this, the GC collects the wrapper midway
+        and the add_callable callbacks (on_executor_finished, etc.) are
+        silently detached → the task never completes.
         """
-        return utils.get_executor_instance(False)
+        register_proxy(self.proxy)
+        self._executor = unreal.new_object(DeadlineProgressExecutor)
+        unreal.log_warning(
+            f"Instanced Executor : {self._executor.get_class().get_name()}"
+        )
+        return self._executor
 
     def _on_individual_shot_finished_callback(self, shot_params):
         """

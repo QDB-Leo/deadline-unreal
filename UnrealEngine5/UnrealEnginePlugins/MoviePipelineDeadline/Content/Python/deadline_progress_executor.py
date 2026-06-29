@@ -5,7 +5,7 @@ through the RPC proxy.
 
 UMoviePipelineExecutorBase ticks OnBeginFrame every engine frame. We override it
 to read UMoviePipelineExecutorJob::GetStatusProgress() (0..1) on the job being
-rendered and push it via proxy.set_progress(0..100). No pipeline object needed.
+rendered and push it via proxy.set_progress(0..100).
 """
 import unreal
 

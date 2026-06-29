@@ -1,6 +1,7 @@
 # Copyright Epic Games, Inc. All Rights Reserved
 
 import unreal
+import re
 
 from getpass import getuser
 
@@ -252,7 +253,7 @@ def set_job_state(job, enable=False):
         # associated shots. This behaves like a disabled job
         for shot in job.shot_info:
             unreal.log_warning(
-                f"Disabling shot `{shot.inner_name}` from current render job `{job.job_name}`"
+                f"Disabling shot `{shot.inner_name}` from current render job `{job.job_name}`UTILZS"
             )
             shot.enabled = False
 
@@ -358,7 +359,7 @@ def update_queue(
                     enable_job = True
                 else:
                     unreal.log_warning(
-                        f"Disabling shot `{shot.inner_name}` from current render job `{job.job_name}`"
+                        f"Disabling shot `{shot.inner_name}` from current render job `{job.job_name}`UTILS "
                     )
                     shot.enabled = False
 
@@ -368,3 +369,64 @@ def update_queue(
 
         # Set the state of the job by enabling or disabling it.
         set_job_state(job, enable=enable_job)
+
+
+def apply_frame_range_override(job, start_frame, end_frame):
+    """
+    Override a graph job's playback range via its user-exposed `Start`/`End`
+    variables (per-job override path). An enabled variable shadows the node
+    default, so this is the control point that actually drives the render.
+    """
+    graph = job.get_graph_preset()
+    if not graph:
+        unreal.log_warning(
+            f"Job `{job.job_name}` has no graph preset - skipping frame range override."
+        )
+        return False
+
+    variables = {v.get_member_name(): v for v in graph.get_variables()}
+    start_var, end_var = variables.get("Start"), variables.get("End")
+    if not start_var or not end_var:
+        unreal.log_warning(
+            f"Graph does not expose 'Start'/'End' variables "
+            f"(found: {list(variables)}) - cannot apply frame range override."
+        )
+        return False
+
+    overrides = job.get_or_create_variable_overrides(graph)
+
+    ok_start = _set_range_variable(overrides, start_var, start_frame)
+    ok_end = _set_range_variable(overrides, end_var, end_frame)
+
+    unreal.log(
+        f"Frame range override on `{job.job_name}`: {start_frame}-{end_frame} "
+        f"(Start ok={ok_start}, End ok={ok_end})"
+    )
+    return ok_start and ok_end
+
+
+def _set_range_variable(overrides, variable, frame_value):
+    """
+    Set a MovieGraphSequencePlaybackRangeBound variable to Custom + value.
+    Type MUST be Custom or the Value is ignored (SequenceDefault falls back
+    to the sequence's own range). Enable the assignment, else the graph
+    default is used.
+    """
+    name = variable.get_member_name()
+    frame_value = int(frame_value)
+    new = f"(Type=Custom,Value={frame_value})"
+
+    try:
+        overrides.set_value_serialized_string(variable, new)
+        overrides.set_variable_assignment_enable_state(variable, True)
+    except Exception as err:
+        unreal.log_warning(f"Could not set/enable `{name}` = {new}: {err}")
+        return False
+
+    # Readback proves Type actually flipped.
+    try:
+        unreal.log(f"`{name}` readback: {overrides.get_value_serialized_string(variable)}")
+    except Exception:
+        pass
+
+    return True

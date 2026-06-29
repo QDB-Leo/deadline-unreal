@@ -10,7 +10,8 @@ from .utils import (
     movie_pipeline_queue,
     execute_render,
     setup_remote_render_jobs,
-    update_render_output
+    update_render_output, 
+    apply_frame_range_override
 )
 
 
@@ -32,7 +33,8 @@ def render_jobs(
     remote_batch_name=None,
     remote_job_preset=None,
     output_dir_override=None,
-    output_filename_override=None
+    output_filename_override=None,
+    frame_range_override=None
 ):
     """
     This renders the current state of the queue
@@ -95,6 +97,9 @@ def render_jobs(
         # Modifying directly the various settings class does not make the config dirty
         # and when rendering starts, the config is reset to the default saved one.
         job.set_configuration(config)
+
+        if frame_range_override:
+            apply_frame_range_override(job, *frame_range_override)
 
         # set job user_data
         user_data = os.environ.get("MRQ_user_data", "{}")

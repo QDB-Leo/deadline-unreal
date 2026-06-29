@@ -47,7 +47,8 @@ def render_queue_manifest(
     remote_job_preset=None,
     executor_instance=None,
     output_dir_override=None,
-    output_filename_override=None
+    output_filename_override=None,
+    frame_range_override=None
 ):
     """
     Function to execute a render using a manifest file
@@ -63,6 +64,7 @@ def render_queue_manifest(
     :param executor_instance: Movie Pipeline executor instance
     :param str output_dir_override: Movie Pipeline output directory override
     :param str output_filename_override: Movie Pipeline filename format override
+    :param tuple frame_range_override: Frame range override (start, end) from Deadline
     :return: MRQ Executor
     """
     # The queue subsystem behaves like a singleton so
@@ -91,6 +93,8 @@ def render_queue_manifest(
     # Todo: Make sure there are always only one job in the manifest file
     if movie_pipeline_queue.get_jobs():
         render_job = movie_pipeline_queue.get_jobs()[0]
+        sequence = unreal.SystemLibrary.conv_soft_obj_path_to_soft_obj_ref(render_job.sequence)
+        sequence_name = sequence.get_name()
     else:
         raise RuntimeError("There are no jobs in the queue!!")
 
@@ -112,11 +116,11 @@ def render_queue_manifest(
     # provided render all the shots in the sequence
     if shots:
         for shot in render_job.shot_info:
-            if shot.inner_name in shots or (shot.outer_name in shots):
+            if shot.inner_name in shots or (shot.outer_name in shots) or (sequence_name in shots):
                 shot.enabled = True
             else:
                 unreal.log_warning(
-                    f"Disabling shot `{shot.inner_name}` from current render job `{render_job.job_name}`"
+                    f"Disabling shot `{shot.inner_name}` from current render job `{render_job.job_name}`QUEUE"
                 )
                 shot.enabled = False
 
@@ -130,7 +134,8 @@ def render_queue_manifest(
             executor_instance=executor_instance,
             is_cmdline=is_cmdline,
             output_dir_override=output_dir_override,
-            output_filename_override=output_filename_override
+            output_filename_override=output_filename_override,
+            frame_range_override=frame_range_override
         )
 
     except Exception as err:

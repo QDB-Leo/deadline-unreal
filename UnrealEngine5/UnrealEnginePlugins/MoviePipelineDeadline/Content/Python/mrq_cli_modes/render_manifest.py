@@ -120,7 +120,7 @@ def render_queue_manifest(
                 shot.enabled = True
             else:
                 unreal.log_warning(
-                    f"Disabling shot `{shot.inner_name}` from current render job `{render_job.job_name}`QUEUE"
+                    f"Disabling shot `{shot.inner_name}` from current render job `{render_job.job_name}`"
                 )
                 shot.enabled = False
 

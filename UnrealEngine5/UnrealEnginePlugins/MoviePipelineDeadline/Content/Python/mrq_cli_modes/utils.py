@@ -1,7 +1,6 @@
 # Copyright Epic Games, Inc. All Rights Reserved
 
 import unreal
-import re
 
 from getpass import getuser
 
@@ -253,7 +252,7 @@ def set_job_state(job, enable=False):
         # associated shots. This behaves like a disabled job
         for shot in job.shot_info:
             unreal.log_warning(
-                f"Disabling shot `{shot.inner_name}` from current render job `{job.job_name}`UTILZS"
+                f"Disabling shot `{shot.inner_name}` from current render job `{job.job_name}`"
             )
             shot.enabled = False
 
@@ -359,7 +358,7 @@ def update_queue(
                     enable_job = True
                 else:
                     unreal.log_warning(
-                        f"Disabling shot `{shot.inner_name}` from current render job `{job.job_name}`UTILS "
+                        f"Disabling shot `{shot.inner_name}` from current render job `{job.job_name}`"
                     )
                     shot.enabled = False
 
@@ -374,8 +373,7 @@ def update_queue(
 def apply_frame_range_override(job, start_frame, end_frame):
     """
     Override a graph job's playback range via its user-exposed `Start`/`End`
-    variables (per-job override path). An enabled variable shadows the node
-    default, so this is the control point that actually drives the render.
+    variables (per-job override).
     """
     graph = job.get_graph_preset()
     if not graph:
@@ -390,19 +388,20 @@ def apply_frame_range_override(job, start_frame, end_frame):
         unreal.log_warning(
             f"Graph does not expose 'Start'/'End' variables "
             f"(found: {list(variables)}) - cannot apply frame range override."
+            #todo : fallback to setting the range on the output settings node ?
         )
         return False
 
     overrides = job.get_or_create_variable_overrides(graph)
 
-    ok_start = _set_range_variable(overrides, start_var, start_frame)
-    ok_end = _set_range_variable(overrides, end_var, end_frame)
+    new_start = _set_range_variable(overrides, start_var, start_frame)
+    new_end = _set_range_variable(overrides, end_var, end_frame)
 
     unreal.log(
         f"Frame range override on `{job.job_name}`: {start_frame}-{end_frame} "
-        f"(Start ok={ok_start}, End ok={ok_end})"
+        f"(Start ={new_start}, End ={new_end})"
     )
-    return ok_start and ok_end
+    return new_start and new_end
 
 
 def _set_range_variable(overrides, variable, frame_value):

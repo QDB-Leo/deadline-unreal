@@ -51,6 +51,24 @@ Relative to Perforce, the `JobPreLoad.py` will try to sync the farmer's Perforce
 To retrieve the local Perforce workspace, we use a pattern to match existing workspaces. You probably will need to adapt this part to your own pattern.
 
 
+# Branches and deploying to production
+
+- `dev`: day-to-day work.
+- `main`: exactly what is submitted in the production P4 depot. Merge `dev` into it when a version is ready.
+
+Production is updated one way only, from `main` to P4, with `scripts/sync_to_p4.ps1`. Never edit the plugins directly in the P4 workspace.
+
+```powershell
+git checkout main; git merge dev; git push
+.\scripts\sync_to_p4.ps1                     # dry run: checks + plan, touches nothing
+.\scripts\sync_to_p4.ps1 -Apply              # fills a NEW pending CL (never submits)
+# review and submit the CL in P4V, then:
+.\scripts\sync_to_p4.ps1 -TagSubmitted 1712  # tags the commit p4-CL1712 and pushes the tag
+```
+
+The script ships only git-tracked files, installs `PreBuiltBinaries/<EngineVersion>` as `Binaries`, and refuses to run if prod was edited outside git since the last `p4-CL*` tag (`-AllowDrift` overrides).
+
+
 # How to use
 
 Once Unreal setup is done (and restarted), in the **MRQ** window there will now be a **Deadline** section for each job that are added to it.

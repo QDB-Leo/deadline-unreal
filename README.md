@@ -12,6 +12,9 @@ Major changes from DwarfLabs version :
 
 Todo :
 - GPU crash detection
+- Frame range override: also pass it to the `render_queue` path in `mrq_rpc.py` (only the serialized pipeline path gets it today)
+- Frame range override: fallback for graphs that don't expose `Start`/`End` variables
+- Check that other job overrides (resolution, temporal samples) survive the serialized manifest on the worker
 
 
 Binaries for Unreal Plugins are provided as they can't be automatically generated as usual

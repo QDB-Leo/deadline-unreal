@@ -71,6 +71,14 @@ git checkout main; git merge dev; git push
 
 The script ships only git-tracked files, installs `PreBuiltBinaries/<EngineVersion>` as `Binaries`, and refuses to run if prod was edited outside git since the last `p4-CL*` tag (`-AllowDrift` overrides).
 
+To test the Deadline side (`JobPreLoad.py`, `UnrealEngine5.py`, ...) on a farm that also runs production jobs, deploy it as a separate Deadline plugin:
+
+```powershell
+.\scripts\deploy_deadline_dev.ps1           # working tree -> <repository>/custom/plugins/UnrealEngine5Dev
+```
+
+Only jobs whose Deadline job preset sets **Plugin** to `UnrealEngine5Dev` run that copy. Add a machine allowlist in the same preset to keep test jobs on your own Worker.
+
 
 # How to use
 

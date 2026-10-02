@@ -443,10 +443,14 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
         # workflow but this is not ideal on the farm. We will expect all
         # custom startup commands for rendering to go through the `Start
         # Command` in the MRQ settings.
+        # -ExecutePythonScript goes for the same reason, and -abslog or the farm
+        # process would write its log over the editor's. Unreal's switches are
+        # case-insensitive (-ExecCmds), so is the match.
         inherited_cmds = re.sub(
-            ".*(?P<cmds>-execcmds=[\s\S]+[\'\"])",
+            r"-(?:execcmds|executepythonscript|abslog)=(?:\"[^\"]*\"|'[^']*'|\S+)",
             "",
-            inherited_cmds
+            inherited_cmds,
+            flags=re.IGNORECASE
         )
 
         command_args.extend(inherited_cmds.split(" "))

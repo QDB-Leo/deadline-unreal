@@ -13,7 +13,6 @@ Major changes from DwarfLabs version :
 
 Todo :
 - GPU crash detection
-- Check that other job overrides (resolution, temporal samples) survive the serialized manifest on the worker
 
 
 Binaries for Unreal Plugins are provided as they can't be automatically generated as usual

@@ -47,7 +47,7 @@ def get_mrg_resolution(graph, job=None):
             if 'Resolution=' not in default_serialized:
                 continue
 
-            unreal.log(f"🔍 Found resolution variable '{var.get_member_name()}' default: {default_serialized}")
+            unreal.log(f"Found resolution variable '{var.get_member_name()}' default: {default_serialized}")
             serialized = default_serialized
 
             if job:
@@ -57,10 +57,10 @@ def get_mrg_resolution(graph, job=None):
                     if is_enabled:
                         override_val = overrides.get_value_serialized_string(var)
                         if override_val:
-                            unreal.log(f"🔍 Job override active: {override_val}")
+                            unreal.log(f"Job override active: {override_val}")
                             serialized = override_val
                 except Exception as e:
-                    unreal.log_warning(f"⚠️ Could not read override: {e}")
+                    unreal.log_warning(f"Could not read override: {e}")
 
             x_match = re.search(r'X=(\d+)', serialized)
             y_match = re.search(r'Y=(\d+)', serialized)
@@ -76,7 +76,7 @@ def get_mrg_resolution(graph, job=None):
                 res = named_res.resolution
                 return res
         except Exception as e:
-            unreal.log_warning(f"⚠️ Error reading node in '{g.get_name()}': {e}")
+            unreal.log_warning(f"Error reading node in '{g.get_name()}': {e}")
         return None
 
     subgraphs = list(graph.get_all_contained_subgraphs())
@@ -84,30 +84,30 @@ def get_mrg_resolution(graph, job=None):
     # 1. Variable on main graph
     res = find_resolution_var(graph, job)
     if res:
-        unreal.log(f"🎬 Resolution from main graph variable: {res.x}x{res.y}")
+        unreal.log(f"Resolution from main graph variable: {res.x}x{res.y}")
         return res
 
     # 2. Variable on subgraphs
     for sg in subgraphs:
         res = find_resolution_var(sg, job)
         if res:
-            unreal.log(f"🎬 Resolution from subgraph variable: {res.x}x{res.y}")
+            unreal.log(f"Resolution from subgraph variable: {res.x}x{res.y}")
             return res
 
     # 3. Node value on main graph
     res = find_resolution_node(graph)
     if res:
-        unreal.log(f"🎬 Resolution from main graph node: {res.x}x{res.y}")
+        unreal.log(f"Resolution from main graph node: {res.x}x{res.y}")
         return res
 
     # 4. Node value on subgraphs
     for sg in subgraphs:
         res = find_resolution_node(sg)
         if res:
-            unreal.log(f"🎬 Resolution from subgraph node: {res.x}x{res.y}")
+            unreal.log(f"Resolution from subgraph node: {res.x}x{res.y}")
             return res
 
-    unreal.log_warning("⚠️ No resolution found in graph variables or nodes, caller should apply default")
+    unreal.log_warning("No resolution found in graph variables or nodes, caller should apply default")
     return None
 
 
@@ -134,14 +134,14 @@ def get_mrg_frame_range(graph, job):
     if not start_var or not end_var or end_owner != owner:
         node_range = get_output_node_range(graph)
         if node_range:
-            unreal.log(f"🎬 Frame range from the graph's Global Output node: {node_range[0]}-{node_range[1]}")
+            unreal.log(f"Frame range from the graph's Global Output node: {node_range[0]}-{node_range[1]}")
             return node_range
         unreal.log(
-            "ℹ️ Graph has no 'Start'/'End' and no custom range on its Global Output node — "
+            "Graph has no 'Start'/'End' and no custom range on its Global Output node - "
             "falling back to the sequence's playback range."
         )
         return None
-    unreal.log(f"🔍 'Start'/'End' variables from `{owner.get_name()}`")
+    unreal.log(f"'Start'/'End' variables from `{owner.get_name()}`")
 
     def read_serialized(var):
         return get_graph_variable_value(job, graph, var.get_member_name())
@@ -164,12 +164,12 @@ def get_mrg_frame_range(graph, job):
 
     if start_val is None or end_val is None:
         unreal.log(
-            "ℹ️ 'Start'/'End' not set to Custom (or not set) — "
+            "'Start'/'End' not set to Custom (or not set) - "
             "falling back to the sequence's playback range."
         )
         return None
 
-    unreal.log(f"🎬 Frame range from graph Start/End: {start_val}-{end_val}")
+    unreal.log(f"Frame range from graph Start/End: {start_val}-{end_val}")
     return (start_val, end_val)
 
 def create_shot_list(sequence, shots_to_render, target_size, ignore_chunk_size=False, frame_range_override=None):
@@ -345,8 +345,8 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
         task per shot.
         """
 
-        unreal.log(f"📦 Asked to execute Queue: {pipeline_queue}")
-        unreal.log(f"🔍 Queue has {len(pipeline_queue.get_jobs())} jobs")
+        unreal.log(f"Asked to execute Queue: {pipeline_queue}")
+        unreal.log(f"Queue has {len(pipeline_queue.get_jobs())} jobs")
 
         # Don't try to process empty/null Queues, no need to send them to
         # Deadline.
@@ -498,113 +498,78 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
 
         deadline_service = get_global_deadline_service_instance()
 
-        #______Pack Jobs to Tasks______#
-        PackJobsToTasks = False
+        # Iterate over each job in the queue and submit it to Deadline.
+        for job in self.pipeline_queue.get_jobs():
 
-        for key, value in project_job_info.items():
-            if key.startswith("ExtraInfoKeyValue"):
-                sub_key, sub_val = value.split('=', 1)
-                if sub_key == "PackJobsToTasks":
-                    PackJobsToTasks = sub_val.lower() in ['true', '1', 't', 'y', 'yes', 'yeah', 'yup', 'certainly', 'uh-huh']
-                    
-        # If PackShotsToTasks is True, we will try to pack multiple shots into a single task
-        if PackJobsToTasks:
-            # Gather all enabled jobs
-            jobs_to_submit = [job for job in self.pipeline_queue.get_jobs() if job.is_enabled() and job.job_preset]
-            if not jobs_to_submit:
-                unreal.log_warning("No jobs to submit.")
+            # Don't send disabled jobs on Deadline
+            if not job.is_enabled():
+                unreal.log(f"Ignoring disabled Job `{job.job_name}`")
+                continue
+
+            # Don't process jobs without job preset assigned, it crashes the editor
+            if not job.job_preset:
+                unreal.log(f"Ignoring Job without DeadlineJobPreset assigned `{job.job_name}`")
+                continue
+
+            unreal.log(f"Submitting Job `{job.job_name}` to Deadline...")
+
+            # retrieve job's user_data
+            user_data = {}
+            try:
+                user_data = json.loads(job.user_data)
+            except json.decoder.JSONDecodeError as err:
+                # not a dict or empty, make it a dict
+                user_data = {"previous_user_data": job.user_data}
+
+            try:
+                # Create a Deadline job object with the default project level
+                # job info and plugin info
+                deadline_job = DeadlineJob(project_job_info, project_plugin_info)
+
+                deadline_job_id = self.submit_job(
+                    job, dict(user_data), deadline_job, command_args, deadline_service
+                )
+
+            except Exception as err:
+                unreal.log_error(
+                    f"Failed to submit job `{job.job_name}` to Deadline, aborting render. \n\tError: {str(err)}"
+                )
+                unreal.log_error(traceback.format_exc())
+                self.on_executor_errored_impl(None, True, str(err))
+                unreal.EditorDialog.show_message(
+                    "Submission Result",
+                    f"Failed to submit job `{job.job_name}` to Deadline with error:\n{str(err)}. "
+                    f"See log for more details.",
+                    unreal.AppMsgType.OK,
+                )
+                self.on_executor_finished_impl()
                 return
 
-            # Create one Deadline job with multiple tasks
-            job_info, plugin_info = get_deadline_info_from_preset(job_preset=project_preset)
-            frames = []
-            for idx, job in enumerate(jobs_to_submit):
-                # Each Unreal job becomes a task (frame) in Deadline
-                frames.append(str(idx))
-                # Optionally, store job info per task in ExtraInfoKeyValue or TaskExtraInfoNames
-                job_info[f"TaskExtraInfoNames{idx}"] = job.job_name
+            if not deadline_job_id:
+                message = (
+                    f"A problem occurred submitting `{job.job_name}`. "
+                    f"Either the job doesn't have any data to submit, "
+                    f"or an error occurred getting the Deadline JobID. "
+                    f"This job status would not be reflected in the UI. "
+                    f"Check the logs for more details."
+                )
+                unreal.log_warning(message)
+                unreal.EditorDialog.show_message(
+                    "Submission Result", message, unreal.AppMsgType.OK
+                )
+                # Finish the executor, or the queue waits on it
+                self.on_executor_finished_impl()
+                return
 
-            job_info["Frames"] = ",".join(frames)
-            # Submit one Deadline job
-            deadline_job = DeadlineJob(job_info, plugin_info)
-            deadline_service = get_global_deadline_service_instance()
-            job_id = deadline_service.submit_job(deadline_job)
-            unreal.log(f"Submitted one Deadline job with {len(jobs_to_submit)} tasks. JobId: {job_id}")
+            else:
+                unreal.log(f"Deadline JobId: {deadline_job_id}")
+                self.job_ids.append(deadline_job_id)
 
-
-        #______Submit Each Job Individually______#
-
-        else:
-            # Iterate over each job in the queue and submit it to Deadline.
-            for job in self.pipeline_queue.get_jobs():
-
-                # Don't send disabled jobs on Deadline
-                if not job.is_enabled():
-                    unreal.log(f"Ignoring disabled Job `{job.job_name}`")
-                    continue
-
-                # Don't process jobs without job preset assigned, it crashes the editor
-                if not job.job_preset:
-                    unreal.log(f"Ignoring Job without DeadlineJobPreset assigned `{job.job_name}`")
-                    continue
-
-                unreal.log(f"Submitting Job `{job.job_name}` to Deadline...")
-
-                # retrieve job's user_data
-                user_data = {}
-                try:
-                    user_data = json.loads(job.user_data)
-                except json.decoder.JSONDecodeError as err:
-                    # not a dict or empty, make it a dict
-                    user_data = {"previous_user_data": job.user_data}
-
-                try:
-                    # Create a Deadline job object with the default project level
-                    # job info and plugin info
-                    deadline_job = DeadlineJob(project_job_info, project_plugin_info)
-
-                    deadline_job_id = self.submit_job(
-                        job, dict(user_data), deadline_job, command_args, deadline_service
-                    )
-
-                except Exception as err:
-                    unreal.log_error(
-                        f"Failed to submit job `{job.job_name}` to Deadline, aborting render. \n\tError: {str(err)}"
-                    )
-                    unreal.log_error(traceback.format_exc())
-                    self.on_executor_errored_impl(None, True, str(err))
-                    unreal.EditorDialog.show_message(
-                        "Submission Result",
-                        f"Failed to submit job `{job.job_name}` to Deadline with error:\n{str(err)}. "
-                        f"See log for more details.",
-                        unreal.AppMsgType.OK,
-                    )
-                    self.on_executor_finished_impl()
-                    return
-
-                if not deadline_job_id:
-                    message = (
-                        f"A problem occurred submitting `{job.job_name}`. "
-                        f"Either the job doesn't have any data to submit, "
-                        f"or an error occurred getting the Deadline JobID. "
-                        f"This job status would not be reflected in the UI. "
-                        f"Check the logs for more details."
-                    )
-                    unreal.log_warning(message)
-                    unreal.EditorDialog.show_message(
-                        "Submission Result", message, unreal.AppMsgType.OK
-                    )
-                    return
-
-                else:
-                    unreal.log(f"Deadline JobId: {deadline_job_id}")
-                    self.job_ids.append(deadline_job_id)
-
-                    # Store the Deadline JobId in our job (the one that exists in
-                    # the queue, not the duplicate) so we can match up Movie
-                    # Pipeline jobs with status updates from Deadline.
-                    user_data.setdefault("job_ids", []).append(deadline_job_id)
-                    job.user_data = json.dumps(user_data)
+                # Store the Deadline JobId in our job (the one that exists in
+                # the queue, not the duplicate) so we can match up Movie
+                # Pipeline jobs with status updates from Deadline.
+                user_data.setdefault("job_ids", []).append(deadline_job_id)
+                job.user_data = json.dumps(user_data)
 
         #______Submission Result______#
 
@@ -613,7 +578,7 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
             message = "No jobs were sent to Deadline, check if enabled."
         else:
             message = (
-                f"✅ Successfully submitted {len(self.job_ids)} jobs to Deadline."
+                f"Successfully submitted {len(self.job_ids)} jobs to Deadline."
                 # f"\n\n" +
                 # "\n".join(job.job_name for job in self.job_ids) +
                 f"\n\nPlease use Deadline Monitor to track render job statuses"
@@ -653,7 +618,6 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
         # If we have a preset set on the job, get the deadline submission details
         try:
             job_info, plugin_info = get_deadline_info_from_preset(job_preset_struct=job.get_deadline_job_preset_struct_with_overrides())
-            # unreal.log(f"📝 JobInfo : {job_info}")
         # Fail the submission if any errors occur
         except Exception as err:
             raise RuntimeError(
@@ -699,7 +663,7 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
             path=unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir())
         )
         if not p4_cl:
-            unreal.log_warning("⚠️ Latest submitted P4 CL not found; job will have no version info.")
+            unreal.log_warning("Latest submitted P4 CL not found; job will have no version info.")
             p4_cl = -1
         job_info["ExtraInfo9"] = f"submitted_cl={p4_cl}"
 
@@ -768,7 +732,6 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
         # Look for our Game Override setting to pull the game mode to start
         # with. We start with this game mode even on a blank map to override
         # the project default from kicking in.
-        game_override_class = None
 
         out_url_params = []
         out_command_line_args = []
@@ -783,9 +746,6 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
                 out_exec_cmds,
             )
 
-            # Set the game override
-            # if setting.get_class() == unreal.MoviePipelineGameOverrideSetting.static_class():
-            #     game_override_class = setting.game_mode_override
 
         game_override_class = unreal.load_class(None, "/Script/MovieRenderPipelineCore.MoviePipelineGameMode")
         if not game_override_class:
@@ -860,20 +820,6 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
             unreal.log_warning("No shots enabled in shot mask, not submitting.")
             return
 
-        # Divide the job to render by the chunk size
-        # i.e {"O": "my_new_shot"} or {"0", "shot_1,shot_2,shot_4"}
-        '''
-        chunk_size = int(job_info.get("ChunkSize", 1))
-        shots = {}
-        frame_list = []
-        for index in range(0, len(shots_to_render), chunk_size):
-
-            shots[str(index)] = ",".join(shots_to_render[index : index + chunk_size])
-
-            frame_list.append(str(index))
-
-        job_info["Frames"] = ",".join(frame_list)
-        '''
 
         # Divide the job to render by the chunk size
         # ChunkSize is counted in frames, and the goal is to create tasks of 1 or more shots
@@ -947,7 +893,7 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
             for track_class in (unreal.MovieSceneSlomoTrack, unreal.MovieSceneTimeWarpTrack)
         )
         if frames_remapped:
-            unreal.log_warning("⚠️ Play Rate / Time Warp track in the sequence: no resume after a GPU crash")
+            unreal.log_warning("Play Rate / Time Warp track in the sequence: no resume after a GPU crash")
         job_info[f"ExtraInfoKeyValue{current_index}"] = f"frames_remapped={int(frames_remapped)}"
         current_index += 1
 
@@ -962,11 +908,11 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
             serialized = get_graph_variable_value(new_job, graph_config, "TemporalSampleCount")
             if serialized:
                 temporal_sample_count = int(serialized)
-                unreal.log(f"🎞 TemporalSampleCount from graph: {temporal_sample_count}")
+                unreal.log(f"TemporalSampleCount from graph: {temporal_sample_count}")
             else:
-                unreal.log_warning("⚠️ Variable 'TemporalSampleCount' not found in graph preset")
+                unreal.log_warning("Variable 'TemporalSampleCount' not found in graph preset")
         else:
-            unreal.log_warning("⚠️ No graph preset on job, skipping TemporalSampleCount lookup")
+            unreal.log_warning("No graph preset on job, skipping TemporalSampleCount lookup")
 
         if temporal_sample_count is not None:
             job_info["ExtraInfo0"] = str(temporal_sample_count)
@@ -987,20 +933,20 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
                 output_dir = output_dir.replace('{project_dir}', project_dir)
                 output_dir = output_dir.replace('{sequence_name}', new_job.job_name)
                 # add other tokens here as needed
-                unreal.log(f"🎬 Resolved output dir: {output_dir}")
+                unreal.log(f"Resolved output dir: {output_dir}")
 
             # Warn if tokens remain unresolved
             if '{' in output_dir:
-                unreal.log_warning(f"⚠️ Output dir still contains unresolved tokens: {output_dir}")
+                unreal.log_warning(f"Output dir still contains unresolved tokens: {output_dir}")
 
 
             output_file = ""
             output_resolution = get_mrg_resolution(graph, job=new_job)
             if not output_resolution:
-                unreal.log_warning("⚠️ Render resolution not found in graph, defaulting to 1920x1080")
+                unreal.log_warning("Render resolution not found in graph, defaulting to 1920x1080")
                 output_resolution = unreal.IntPoint(1920, 1080)
 
-            unreal.log(f"🎬 Output settings from Graph: {output_dir}, {output_file}")
+            unreal.log(f"Output settings from Graph: {output_dir}, {output_file}")
         else:
             # Classic MoviePipeline path
             output_setting = new_job.get_configuration().find_setting_by_class( unreal.MoviePipelineOutputSetting )
@@ -1008,7 +954,7 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
                 output_dir = output_setting.output_directory.path
                 output_file = output_setting.file_name_format
                 output_resolution = output_setting.output_resolution
-                unreal.log(f"🎬 Output settings from MoviePipeline: {output_dir}")
+                unreal.log(f"Output settings from MoviePipeline: {output_dir}")
 
         # Set the job output directory override on the deadline job
         if new_job.output_directory_override.path:
@@ -1017,7 +963,6 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
         else:
             job_info[f"ExtraInfoKeyValue{current_index}"] = f"output_directory_override={output_dir}"
             current_index += 1
-            # unreal.log_warning(f"No output directory override set on job, using the one from the output settings : {output_dir}.")
 
 
         # Set the job filename format override on the deadline job
@@ -1030,7 +975,6 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
         # TODO: Resolve path formatting based on render settings to make it understandable by Deadline
         # The job's override is where the frames go (the worker sets it on the graph)
         job_info["OutputDirectory0"] = new_job.output_directory_override.path or output_dir
-        # unreal.log(f'✈ output directory: {job_info["OutputDirectory0"]}')
 
         # TODO: Resolve filename format based on render settings to make it understandable by Deadline
         job_info["OutputFilename0"] = new_job.filename_format_override or output_file
@@ -1054,7 +998,7 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
         current_env_index += 1
 
         if not new_job.filename_format_override:
-            unreal.log_warning("⚠️ No filename format override set on job — Deadline Monitor output filename will be empty.")
+            unreal.log_warning("No filename format override set on job - Deadline Monitor output filename will be empty.")
 
 
 
@@ -1100,7 +1044,6 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
         # Remove any duplicates in the commandline args and convert to a string
         full_cmd_args = " ".join(list(OrderedDict.fromkeys(full_cmd_args))).strip()
 
-        # unreal.log(f"Deadline job command line args: {full_cmd_args}")
 
         # Update the plugin info with the commandline arguments
         plugin_info.update(

@@ -678,12 +678,12 @@ class UnrealEngineManagedProcess(ManagedProcess):
             task = plugin.GetCurrentTask()
             RepositoryUtils.FailTasks(job, [task])
             RepositoryUtils.SaveJob(job)
-            plugin.LogInfo(f"Task {task.TaskId} → Failed (GPU crash).")
+            plugin.LogInfo(f"Task {task.TaskId} -> Failed (GPU crash).")
         except Exception as e:
             plugin.LogWarning(f"Could not mark the task as Failed: {e}")
 
         # 4. Exit the is_task_complete loop and end the plugin processing.
-        plugin.FailRender(f"GPU crash — last OK frame: {last}.\n{line}")
+        plugin.FailRender(f"GPU crash - last OK frame: {last}.\n{line}")
 
     def _handle_progress(self):
         """

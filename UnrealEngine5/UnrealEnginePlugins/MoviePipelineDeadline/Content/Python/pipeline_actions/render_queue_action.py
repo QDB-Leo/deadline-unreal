@@ -118,10 +118,13 @@ def _execute_submission(args):
     # workflow but this is not ideal on the farm. We will expect all
     # custom startup commands for rendering to go through the `Start
     # Command` in the MRQ settings.
+    # Same as remote_executor: -ExecutePythonScript and -abslog go too, and Unreal's
+    # switches are case-insensitive (-ExecCmds), so is the match.
     inherited_cmds = re.sub(
-        ".(?P<cmds>-execcmds=[\w\W]+[\'\"])",
+        r"-(?:execcmds|executepythonscript|abslog)=(?:\"[^\"]*\"|'[^']*'|\S+)",
         "",
-        inherited_cmds
+        inherited_cmds,
+        flags=re.IGNORECASE
     )
 
     command_args.extend(inherited_cmds.split(" "))

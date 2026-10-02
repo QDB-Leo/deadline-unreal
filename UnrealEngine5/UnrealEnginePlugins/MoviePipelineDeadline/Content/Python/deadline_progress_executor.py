@@ -60,7 +60,7 @@ class DeadlineProgressExecutor(unreal.MoviePipelinePIEExecutor):
         try:
             progress = job.get_status_progress()  # 0.0 .. 1.0, updated live
         except Exception as err:
-            unreal.log_warning(f"⚠️ Could not read job status progress: {err}")
+            unreal.log_warning(f"Could not read job status progress: {err}")
             return
 
         pct = max(0, min(100, int(round(progress * 100.0))))
@@ -74,4 +74,4 @@ class DeadlineProgressExecutor(unreal.MoviePipelinePIEExecutor):
         try:
             _active_proxy.set_progress(float(pct))
         except Exception as err:
-            unreal.log_warning(f"⚠️ Failed to push progress {pct}% to Deadline: {err}")
+            unreal.log_warning(f"Failed to push progress {pct}% to Deadline: {err}")

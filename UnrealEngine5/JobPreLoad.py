@@ -27,7 +27,7 @@ def __main__(deadline_plugin):
     p4.port = job.GetJobEnvironmentKeyValue("P4_PORT")
     p4.user = job.GetJobEnvironmentKeyValue("P4_USER")
 
-    # Ticket-based auth only — no hardcoded password.
+    # Ticket-based auth only - no hardcoded password.
     # The farm account must be logged in once, outside of this code:
     # p4 login   (ideally in a group with a long timeout so it doesn't re-expire)
     # We do NOT set p4.password: P4Python will use the cached ticket (.p4tickets).
@@ -110,7 +110,7 @@ def __main__(deadline_plugin):
 
         deadline_plugin.LogInfo(f"Shot wanted CL is {sync_target}")
 
-        if sync_to_specific_cl: # have/target comparison unreliable → always sync
+        if sync_to_specific_cl: # have/target comparison unreliable -> always sync
             sync = True   
         else:
             sync = (not local_cl) or (local_cl != server_cl)

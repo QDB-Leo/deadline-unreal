@@ -4,7 +4,7 @@ from P4 import P4, P4Exception
 
 
 def _log(logger, level, msg):
-    """Logger neutre : marche sous Unreal, Deadline, ou standalone."""
+    """Logs through logger (Unreal, Deadline) or print."""
     if logger:
         getattr(logger, level, logger.info if hasattr(logger, "info") else print)(msg)
     else:
@@ -33,7 +33,7 @@ def get_perforce_settings_from_unreal_ini(project_root, logger=None):
 
 
 def get_p4(project_root=None, logger=None):
-    """Construit un objet P4 DÉCONNECTÉ depuis le .ini (ou l'environnement)."""
+    """A DISCONNECTED P4 object, set from Unreal's source control settings (or the P4 environment)."""
     settings = (
         get_perforce_settings_from_unreal_ini(project_root, logger)
         if project_root else {"P4PORT": "", "P4USER": ""}
@@ -42,11 +42,11 @@ def get_p4(project_root=None, logger=None):
     if settings["P4PORT"]:
         p4.port = settings["P4PORT"]
     else:
-        _log(logger, "warning", "P4PORT absent, fallback environnement P4.")
+        _log(logger, "warning", "No P4PORT in the settings, using the P4 environment.")
     if settings["P4USER"]:
         p4.user = settings["P4USER"]
     else:
-        _log(logger, "warning", "P4USER absent, fallback environnement P4.")
+        _log(logger, "warning", "No P4USER in the settings, using the P4 environment.")
     # The workspace too: commands on the project's local paths need it
     if settings.get("P4CLIENT"):
         p4.client = settings["P4CLIENT"]
@@ -54,20 +54,20 @@ def get_p4(project_root=None, logger=None):
 
 
 def verify_p4_ticket(p4):
-    """Valide qu'un ticket existe pour ce port=user. Lève RuntimeError actionnable."""
+    """Checks there is a ticket for this port and user. Raises a RuntimeError saying what to do."""
     try:
         p4.connect()
     except P4Exception as err:
         raise RuntimeError(
-            f"Serveur P4 injoignable ({p4.user}@{p4.port}) : {err}\n"
-            f"Vérifier P4PORT et le réseau."
+            f"P4 server unreachable ({p4.user}@{p4.port}): {err}\n"
+            f"Check P4PORT and the network."
         )
     try:
         p4.run_login("-s")
     except P4Exception:
         raise RuntimeError(
-            f"Pas de ticket P4 valide pour {p4.user}@{p4.port} sur cette machine.\n"
-            f"Login manuel requis : `p4 login` (P4PORT={p4.port}, P4USER={p4.user})."
+            f"No valid P4 ticket for {p4.user}@{p4.port} on this machine.\n"
+            f"Log in first: `p4 login` (P4PORT={p4.port}, P4USER={p4.user})."
         )
     finally:
         if p4.connected():
@@ -86,7 +86,7 @@ def get_latest_submitted_cl(p4, logger=None, path=None):
             args.append(os.path.join(path, "..."))
         return p4.run_changes(*args)[0]["change"]
     except P4Exception as e:
-        _log(logger, "error", f"Erreur P4 (get_latest_submitted_cl): {e}")
+        _log(logger, "error", f"P4 error (get_latest_submitted_cl): {e}")
         for err in p4.errors:
             _log(logger, "error", f"  {err}")
         return None

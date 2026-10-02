@@ -362,7 +362,7 @@ class MRQRender(BaseRPC):
         IMPORTANT: stored on self to keep the Python wrapper alive for the
         whole render (async). Without this, the GC collects the wrapper midway
         and the add_callable callbacks (on_executor_finished, etc.) are
-        silently detached → the task never completes.
+        silently detached -> the task never completes.
         """
         register_proxy(self.proxy)
         self._executor = unreal.new_object(DeadlineProgressExecutor)

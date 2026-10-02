@@ -29,5 +29,5 @@ Type=Integer
 Label=RPC Process Wait time
 Category=Options
 Index=2
-Default=300
+Default=600
 Description=The amount of seconds the RPC process should wait for a connection from Unreal

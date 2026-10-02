@@ -10,7 +10,8 @@ from .utils import (
     movie_pipeline_queue,
     execute_render,
     setup_remote_render_jobs,
-    update_render_output, 
+    update_render_output,
+    apply_graph_output_overrides,
     apply_frame_range_override
 )
 
@@ -65,7 +66,13 @@ def render_jobs(
                 unreal.MoviePipelineGameOverrideSetting
             )
 
-            if texture_streaming_override == "Disabled":
+            if not game_setting:
+                # Graph jobs have no such setting (their game overrides live in the graph)
+                unreal.log_warning(
+                    f"No Game Override setting on `{job.job_name}`: texture streaming override "
+                    f"`{texture_streaming_override}` not applied."
+                )
+            elif texture_streaming_override == "Disabled":
                 game_setting.texture_streaming = unreal.MoviePipelineTextureStreamingMethod.DISABLED
             elif texture_streaming_override == "FullyLoad":
                 game_setting.texture_streaming = unreal.MoviePipelineTextureStreamingMethod.FULLY_LOAD
@@ -77,13 +84,22 @@ def render_jobs(
         if override_output != None:
             override_output = int(override_output)
 
-        # update output settings
-        update_render_output(
-            job,
-            output_dir=output_dir_override,
-            output_filename=output_filename_override,
-            override_output=override_output,
-        )
+        # update output settings: a graph job renders from its graph and ignores the
+        # job's (legacy) configuration, so its overrides go on the graph's nodes
+        if job.get_graph_preset():
+            apply_graph_output_overrides(
+                job,
+                output_dir=output_dir_override,
+                output_filename=output_filename_override,
+                override_output=override_output,
+            )
+        else:
+            update_render_output(
+                job,
+                output_dir=output_dir_override,
+                output_filename=output_filename_override,
+                override_output=override_output,
+            )
 
         # Get the job output settings
         output_setting = config.find_setting_by_class(

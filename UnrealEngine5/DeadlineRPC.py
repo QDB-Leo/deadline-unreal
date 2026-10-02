@@ -25,6 +25,10 @@ class BaseDeadlineRPCJobManager:
         # Track all completed tasks
         self._completed_tasks = set()
 
+        # Failures reported by Unreal, by task id. Deadline only fails a task from the
+        # thread rendering it, not from this server thread: render_task raises them.
+        self._failed_tasks = {}
+
     def connect(self):
         """
         First mode of contact to the rpc server. It is very critical the
@@ -103,11 +107,22 @@ class BaseDeadlineRPCJobManager:
 
     def fail_render(self, message):
         """
-        Fail a render job with a message
+        Fails the current task with a message. Called by Unreal, so on this server
+        thread, where FailRender would only raise here and the task would carry on:
+        the failure is kept for render_task, which fails the task (get_task_failure).
         :param message: Failure message
         """
-        self._deadline_plugin.FailRender(message.strip("\n"))
+        task_id = str(self._deadline_plugin.GetCurrentTaskId())
+        self._failed_tasks.setdefault(task_id, message.strip("\n"))
+        self._deadline_plugin.LogWarning(f"Unreal reported a failure of task {task_id}: {message.strip()}")
         return True
+
+    def get_task_failure(self, task_id):
+        """
+        The failure Unreal reported for a task (fail_render), or an empty string
+        :param task_id: job task id
+        """
+        return self._failed_tasks.get(str(task_id), "")
 
     def set_status_message(self, message):
         """
@@ -181,11 +196,13 @@ class BaseDeadlineRPCJobManager:
             )
         )
 
-        # Set the file names on the job
-        RepositoryUtils.UpdateJobOutputFileNames(self._job, filenames)
+        # Set the file names on the job, as it is now: the one loaded when the task
+        # started would undo what was changed in the Monitor since
+        job = RepositoryUtils.GetJob(self._job.JobId, True)
+        RepositoryUtils.UpdateJobOutputFileNames(job, filenames)
 
         # Make sure to save the settings just in case
-        RepositoryUtils.SaveJob(self._job)
+        RepositoryUtils.SaveJob(job)
 
     def update_job_output_directories(self, directories):
         """
@@ -201,11 +218,12 @@ class BaseDeadlineRPCJobManager:
             )
         )
 
-        # Set the directory on the job
-        RepositoryUtils.SetJobOutputDirectories(self._job, directories)
+        # Set the directory on the job, as it is now (see update_job_output_filenames)
+        job = RepositoryUtils.GetJob(self._job.JobId, True)
+        RepositoryUtils.SetJobOutputDirectories(job, directories)
 
         # Make sure to save the settings just in case
-        RepositoryUtils.SaveJob(self._job)
+        RepositoryUtils.SaveJob(job)
 
     def check_path_mappings(self, paths):
         """

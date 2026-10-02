@@ -300,6 +300,39 @@ def update_render_output(
         output_setting.override_existing_output = override_output
 
 
+def apply_graph_output_overrides(job, output_dir=None, output_filename=None, override_output=None):
+    """
+    update_render_output for a graph job: sets the overrides on the Global Output
+    nodes (directory, overwrite existing output) and the file output nodes (filename
+    format) of the job's graph and of its subgraphs, so the override wins wherever the
+    graph sets them. Changes the loaded graphs only (they are not saved), which is
+    what the worker renders.
+    """
+    graph = job.get_graph_preset()
+    graphs = [graph] + list(graph.get_all_contained_subgraphs())
+
+    for g in graphs:
+        for node in g.get_nodes_for_branch(unreal.MovieGraphGlobalOutputSettingNode, "Globals", False):
+            if output_dir:
+                node.set_editor_property("output_directory", unreal.DirectoryPath(output_dir))
+                node.set_editor_property("override_output_directory", True)
+            if override_output is not None:
+                node.set_editor_property("overwrite_existing_output", bool(override_output))
+                node.set_editor_property("override_b_overwrite_existing_output", True)
+        if output_filename:
+            for branch in g.get_branch_names():
+                for node in g.get_nodes_for_branch(unreal.MovieGraphFileOutputNode, str(branch), False):
+                    node.set_editor_property("file_name_format", output_filename)
+                    node.set_editor_property("override_file_name_format", True)
+
+    if output_dir:
+        unreal.log_warning(f"Overriding output directory on the graph! New output directory is `{output_dir}`.")
+    if output_filename:
+        unreal.log_warning(f"Overriding filename format on the graph! New format is `{output_filename}`.")
+    if override_output is not None:
+        unreal.log(f"Overwrite existing output on the graph: {bool(override_output)}")
+
+
 def update_queue(
     jobs=None,
     shots=None,

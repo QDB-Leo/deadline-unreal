@@ -47,6 +47,9 @@ def get_p4(project_root=None, logger=None):
         p4.user = settings["P4USER"]
     else:
         _log(logger, "warning", "P4USER absent, fallback environnement P4.")
+    # The workspace too: commands on the project's local paths need it
+    if settings.get("P4CLIENT"):
+        p4.client = settings["P4CLIENT"]
     return p4
 
 
@@ -71,14 +74,36 @@ def verify_p4_ticket(p4):
             p4.disconnect()
 
 
-def get_latest_submitted_cl(p4, logger=None):
+def get_latest_submitted_cl(p4, logger=None, path=None):
+    """
+    Latest submitted CL under path (e.g. the project directory, through the workspace),
+    or of the whole server without path.
+    """
     try:
         p4.connect()
-        return p4.run_changes("-s", "submitted", "-m", "1")[0]["change"]
+        args = ["-s", "submitted", "-m", "1"]
+        if path:
+            args.append(os.path.join(path, "..."))
+        return p4.run_changes(*args)[0]["change"]
     except P4Exception as e:
         _log(logger, "error", f"Erreur P4 (get_latest_submitted_cl): {e}")
         for err in p4.errors:
             _log(logger, "error", f"  {err}")
+        return None
+    finally:
+        if p4.connected():
+            p4.disconnect()
+
+def get_opened_files(p4, path, logger=None):
+    """
+    Local paths of the files opened (checked out, added, deleted) in the workspace under
+    path: work the farm won't render, since it syncs the depot. None if P4 can't tell.
+    """
+    try:
+        p4.connect()
+        return [f.get("clientFile") or f.get("depotFile") for f in p4.run_opened(os.path.join(path, "..."))]
+    except P4Exception as e:
+        _log(logger, "warning", f"P4 error (get_opened_files): {e}")
         return None
     finally:
         if p4.connected():

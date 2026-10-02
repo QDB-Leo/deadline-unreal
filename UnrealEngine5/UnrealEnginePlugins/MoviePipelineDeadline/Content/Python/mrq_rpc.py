@@ -498,10 +498,16 @@ class MRQRender(BaseRPC):
 
     def _on_job_finished(self, executor=None, success=None):
         """
-        Callback to execute on executor finished
+        Callback to execute on executor finished. A render that didn't succeed
+        (canceled, errored) fails the task: completing it would show the job
+        Completed in Deadline with frames missing.
         """
-        # TODO: add th ability to set the output directory for the task
-        unreal.log(f"Task {self.current_task_id} complete!")
+        if success is False:
+            message = f"Render of task {self.current_task_id} did not complete successfully."
+            unreal.log_error(message)
+            self.proxy.fail_render(message)
+        else:
+            unreal.log(f"Task {self.current_task_id} complete!")
         self.task_complete = True
 
     def _on_job_failed(self, executor, pipeline, is_fatal, error):
@@ -512,7 +518,9 @@ class MRQRender(BaseRPC):
         unreal.log_error(
             f"An error occurred executing task `{self.current_task_id}`: \n\t{error}"
         )
-        self.proxy.fail_render(error)
+        # error is an unreal.Text, which XML-RPC can't send: the failure never reached
+        # Deadline and the task went on to complete
+        self.proxy.fail_render(str(error))
 
 
 if __name__ == "__main__":

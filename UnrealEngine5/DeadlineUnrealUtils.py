@@ -83,7 +83,11 @@ def apply_override_texture_streaming(deadline_plugin, serialized_pipeline, key):
                         }
 
 
-def write_manifest_file(deadline_plugin, for_cmdline=False, project_root=None):
+def write_manifest_file(deadline_plugin, project_root):
+    """
+    Writes the job's serialized pipeline, with its overrides applied, as the manifest
+    the commandline mode renders (only the shots of the current task enabled).
+    """
     # for some reasons, importing re at the start of the file does not work
     # need to import it here
     import re
@@ -99,45 +103,41 @@ def write_manifest_file(deadline_plugin, for_cmdline=False, project_root=None):
     # read string as dict
     serialized_pipeline = json.loads(serialized_pipeline_str)
 
-    # in commandline mode, Unreal will render all enabled shots in the manifest file
+    # Unreal will render all enabled shots in the manifest file
     # so we need to properly disable/enable shots here
-    if for_cmdline:
-        # get shot repartition per task
-        shot_info = deadline_plugin.GetJob().GetJobExtraInfoKeyValue("shot_info")
+    # get shot repartition per task
+    shot_info = deadline_plugin.GetJob().GetJobExtraInfoKeyValue("shot_info")
 
-        if shot_info:
-            task_id = deadline_plugin.GetCurrentTaskId()
-            shot_info = json.loads(shot_info)
-            shots = shot_info.get(task_id, "").split(",")
+    if shot_info:
+        task_id = deadline_plugin.GetCurrentTaskId()
+        shot_info = json.loads(shot_info)
+        shots = shot_info.get(task_id, "").split(",")
 
-            for key, value in serialized_pipeline.get('Exports', {}).items():
-                if re.fullmatch("MoviePipelineQueue_\d+:MoviePipelineDeadlineExecutorJob_\d+.MoviePipelineExecutorShot_\d+", key):
-                    shot_name = value.get('Properties', {}).get('OuterName', {}).get('__Value', "")
+        for key, value in serialized_pipeline.get('Exports', {}).items():
+            if re.fullmatch(r"MoviePipelineQueue_\d+:MoviePipelineDeadlineExecutorJob_\d+.MoviePipelineExecutorShot_\d+", key):
+                shot_name = value.get('Properties', {}).get('OuterName', {}).get('__Value', "")
 
-                    if not shot_name:
-                        continue
+                if not shot_name:
+                    continue
 
-                    # enable or disable shot based on what this task should render
-                    enabled = False
-                    if shot_name in shots:
-                        enabled = True
+                # enable or disable shot based on what this task should render
+                enabled = False
+                if shot_name in shots:
+                    enabled = True
 
-                    serialized_pipeline['Exports'][key]['Properties']['bEnabled'] = {
-                        "__Type": "BoolProperty",
-                        "__Value": enabled
-                    }
+                serialized_pipeline['Exports'][key]['Properties']['bEnabled'] = {
+                    "__Type": "BoolProperty",
+                    "__Value": enabled
+                }
 
     # edit serialized pipeline to apply overrides
     # and move the render preset to another location otherwise the overrides are not taken into account
     #   move PresetOrigin from MoviePipelineQueue_X:MoviePipelineDeadlineExecutorJob_X
     #   to   ConfigOrigin in   MoviePipelineQueue_X:MoviePipelineDeadlineExecutorJob_X.DefaultConfig
     # same for ShotOverride presets
-    job_name = 'NoJobName'
     for key, value in serialized_pipeline.get('Exports', {}).items():
         # is the job main entry ?
-        if re.fullmatch("MoviePipelineQueue_\d+:MoviePipelineDeadlineExecutorJob_\d+", key):
-            job_name = value.get('Properties', {}).get('JobName', {}).get('__Value', '')
-
+        if re.fullmatch(r"MoviePipelineQueue_\d+:MoviePipelineDeadlineExecutorJob_\d+", key):
             # search for field PresetOrigin
             preset = value.get('Properties', {}).get('PresetOrigin')
 
@@ -157,7 +157,7 @@ def write_manifest_file(deadline_plugin, for_cmdline=False, project_root=None):
             apply_override_texture_streaming(deadline_plugin, serialized_pipeline, key)
 
         # is a shot main entry ?
-        elif re.fullmatch("MoviePipelineQueue_\d+:MoviePipelineDeadlineExecutorJob_\d+\.MoviePipelineExecutorShot_\d+", key):
+        elif re.fullmatch(r"MoviePipelineQueue_\d+:MoviePipelineDeadlineExecutorJob_\d+\.MoviePipelineExecutorShot_\d+", key):
             # search for field ShotOverridePresetOrigin
             preset = value.get('Properties', {}).get('ShotOverridePresetOrigin')
 
@@ -174,15 +174,9 @@ def write_manifest_file(deadline_plugin, for_cmdline=False, project_root=None):
     # re-stringify the dict so we can write it in the file
     serialized_pipeline_str = json.dumps(serialized_pipeline, indent=4)
 
-    manifest_filepath = None
-    if for_cmdline:
-        # for commandline mode, Unreal is quite picky for the manifest file...
-        # better keep it in default directory with default name
-        manifest_filepath = f"{project_root}/Saved/MovieRenderPipeline/QueueManifest.utxt"
-    else:
-        # copy manifest file to output directory, for debug purpose only, Unreal will not read this
-        output_dir = deadline_plugin.GetJob().GetJobExtraInfoKeyValue("output_directory_override")
-        manifest_filepath = os.path.join(output_dir, f"{job_name}_QueueManifest.utxt")
+    # Unreal is quite picky for the manifest file...
+    # better keep it in default directory with default name
+    manifest_filepath = f"{project_root}/Saved/MovieRenderPipeline/QueueManifest.utxt"
 
     manifest_filepath = manifest_filepath.replace("\\", "/")
 

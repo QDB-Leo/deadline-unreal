@@ -21,6 +21,8 @@
 
     Safety checks (all abort the run):
       - git: must be on -Branch, clean, and equal to origin/<Branch>.
+      - binaries: PreBuiltBinaries/<EngineVersion> committed after the plugin's
+            last Source/ change (-AllowStaleBinaries to proceed anyway).
       - p4: logged in, workspace synced to head for the plugin folders,
             no plugin file already opened in another changelist,
             no unopened local edits in the workspace.
@@ -40,6 +42,9 @@ param(
 
     [Parameter(ParameterSetName = 'Sync')]
     [switch]$AllowDrift,
+
+    [Parameter(ParameterSetName = 'Sync')]
+    [switch]$AllowStaleBinaries,
 
     [Parameter(ParameterSetName = 'Tag', Mandatory = $true)]
     [int]$TagSubmitted,
@@ -207,6 +212,19 @@ if ($lastTag) {
 }
 else {
     Write-Host "last sync: none (no $TagPrefix* tag) - drift check skipped for this first sync" -ForegroundColor Yellow
+}
+
+
+# Prod loads PreBuiltBinaries, not Source/: they must be rebuilt after any C++ change
+foreach ($plugin in $Plugins) {
+    $dir = "$PluginsRepoDir/$plugin"
+    $sourceTime = @(Invoke-Git log -1 --format=%ct -- "$dir/Source")[0]
+    $binariesTime = @(Invoke-Git log -1 --format=%ct -- "$dir/PreBuiltBinaries/$EngineVersion")[0]
+    if ($sourceTime -and (-not $binariesTime -or [long]$sourceTime -gt [long]$binariesTime)) {
+        $stale = "${plugin}: Source/ changed after PreBuiltBinaries/$EngineVersion. Rebuild (testbed's build.ps1 -UpdatePrebuilt) and commit the binaries."
+        if (-not $AllowStaleBinaries) { Fail "$stale Or rerun with -AllowStaleBinaries." }
+        Write-Host "-AllowStaleBinaries set: $stale" -ForegroundColor Yellow
+    }
 }
 
 

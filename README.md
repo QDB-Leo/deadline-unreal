@@ -12,6 +12,9 @@ Major changes from DwarfLabs version :
 - FrameRange override support, so you can change framerange inside Deadline and requeue. Used in conjonction with a perforce change pushed to depot so you don't have to resubmit a job.
   The job's frames are the sequence's frames, last one included (a 10-frame shot starting at 0 is `0-9`). The worker applies them through the `Start`/`End` variables (job's graph, or else a subgraph), or the Global Output node's custom playback range when the graph has no such variables. Sequences with a shot track get one task per shot, whose frames only number the shots: no override for those.
 - GPU crash detection (editor mode): on a D3D/DXGI crash line in Unreal's log, the task fails and Deadline requeues it, and the next attempt resumes from the last frame the task wrote (rendered again, its write may be cut). The job shows it as `lastframerendered`. Sequences with a Play Rate or Time Warp track (`frames_remapped=1`) and shot tasks don't resume: their task is failed for good.
+- A render that doesn't succeed fails its task: a canceled or errored render, an error reported by Unreal, Unreal exiting mid task. Tasks have a timeout per frame: the job preset's Task Timeout Seconds, 300 s when it is 0 (enough for a 4K path traced frame), times the task's frames.
+- Output overrides of the job (directory, filename format, overwrite existing output) apply to graph jobs too: the worker sets them on the graph's Global Output and file output nodes.
+- Before submitting, the project's files opened in Perforce but not submitted are listed: the farm renders the depot, without them. The job notes the project's latest submitted CL (`submitted_cl`) and the CL the worker actually rendered (`synced_cl`).
 
 Todo :
 - GPU crash resume for sequences with a Play Rate / Time Warp track: map the output frames back to the sequence's
@@ -43,7 +46,7 @@ There is a dependancy on Perforce's python API. When sending a job to Deadline, 
 We also implemented a feature of **shot packing**, that will try to group small shots (few frames) together in a same task. The goal is to capitalize on Unreal opening time by rendering multiple shots with the same Unreal instance. It also helps optimizing render time by reducing render time differences between tasks.
 
 The most important file if you need to make modifications is `remote_executor.py`, which is what is called when you press "Render remote" in Unreal and will create and send the job to Deadline.
-`PreJob.py` and `custom_unreal_prescript.py` are also useful to modify.
+`custom_unreal_prescript.py` is also useful to modify.
 
 
 ## Deadline
@@ -69,7 +72,7 @@ git checkout main; git merge dev; git push
 .\scripts\sync_to_p4.ps1 -TagSubmitted 1712  # tags the commit p4-CL1712 and pushes the tag
 ```
 
-The script ships only git-tracked files, installs `PreBuiltBinaries/<EngineVersion>` as `Binaries`, and refuses to run if prod was edited outside git since the last `p4-CL*` tag (`-AllowDrift` overrides).
+The script ships only git-tracked files, installs `PreBuiltBinaries/<EngineVersion>` as `Binaries`, and refuses to run if prod was edited outside git since the last `p4-CL*` tag (`-AllowDrift` overrides), or if a plugin's `Source/` changed after its `PreBuiltBinaries` (`-AllowStaleBinaries` overrides).
 
 To test the Deadline side (`JobPreLoad.py`, `UnrealEngine5.py`, ...) on a farm that also runs production jobs, deploy it as a separate Deadline plugin:
 
@@ -96,7 +99,6 @@ Click on **Render remote** and that's it :)
 - Forced command line argument `-renderoffscreen`, as typical renderfarm worker do not have the UI setup and live render preview is unnecessary.
 - Corrected plugin info entry **CommandLineMode**, to allow choosing the opening/render mode for Unreal jobs (command line or editor).
 - Added a **JobPreLoad** that will sync the local Perforce repository based on the CL provided for the job.
-- Added a **PreJob**, to write a manifest file in the output directory for debug/info purpose. The manifest is with overrides applied.
 - Added a custom pre-script to run at Unreal's opening. Allows to do some process before the render tasks starts.
 - Added the sequence's map path to the job info so the pre-script can open it early, preventing issues with unfinished loading of meshes or textures (that would not even load at later frames or with lots of warmup frames).
 - Fixed applying overrides to the Unreal job configuration (like output directory and filename). Modifying the configuration does not dirty it, and Unreal ignores overrides if it is not dirty.
@@ -133,6 +135,5 @@ Click on **Render remote** and that's it :)
 
 - Make an option to opt-in/out of shot packing.
 
-- Make an option for timeout type (frame or global).
 
 - Make Perforce dependency and CL syncing optionnal. Current implementation assumes workers need to sync their local workspace.

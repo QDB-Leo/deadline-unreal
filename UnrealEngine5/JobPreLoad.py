@@ -133,7 +133,17 @@ def __main__(deadline_plugin):
                     deadline_plugin.FailRender(f"Errors: {e.errors} \nWarnings: {e.warnings}")
                     return
 
+        # What this render uses, for traceability (the head by default, not the CL
+        # submitted with the job): the CL synced, or the workspace's when up to date
+        synced_cl = str(sync_target if sync else local_cl)
+        deadline_plugin.LogInfo(f"Rendering the workspace at CL {synced_cl}")
+
 #__________________Output directory override____________________
+
+    # Changes saved on the job as it is now: the one loaded when the task started
+    # would undo what was changed in the Monitor since
+    job = RepositoryUtils.GetJob(job.JobId, True)
+    job.SetJobExtraInfoKeyValue("synced_cl", synced_cl)
 
     # update job output directory
     output_directory_override = job.GetJobExtraInfoKeyValue("output_directory_override")

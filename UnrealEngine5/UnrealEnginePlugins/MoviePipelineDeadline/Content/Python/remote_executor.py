@@ -21,6 +21,10 @@ from mrq_cli_modes.utils import find_graph_variable, get_graph_variable_value, g
 
 project_root = unreal.Paths.project_dir()
 
+# Seconds per frame before Deadline times a task out, when the job preset's Task
+# Timeout Seconds is 0. Covers a 4K path traced frame; set the preset's for less.
+DEFAULT_FRAME_TIMEOUT = 300
+
 #_______P4_______#
 
 class _UnrealLogger:
@@ -394,6 +398,25 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
                 self.on_executor_finished_impl()
                 return
 
+        # Saved is not submitted: the farm syncs the depot, so work still opened in the
+        # workspace won't be in the render. Ask (unattended: submit anyway).
+        project_dir = unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir())
+        opened = p4_utils.get_opened_files(p4, project_dir, logger=_UnrealLogger)
+        if opened:
+            listing = "\n".join(opened[:15]) + (f"\n... and {len(opened) - 15} more" if len(opened) > 15 else "")
+            unreal.log_warning(f"{len(opened)} project file(s) opened in Perforce, not submitted:\n{listing}")
+            answer = unreal.EditorDialog.show_message(
+                "Perforce",
+                f"{len(opened)} file(s) of the project are opened in Perforce but not submitted. "
+                f"The farm renders the depot, without these changes:\n\n{listing}\n\nSubmit anyway?",
+                unreal.AppMsgType.YES_NO,
+                default_value=unreal.AppReturnType.YES
+            )
+            if answer != unreal.AppReturnType.YES:
+                unreal.log_warning("Submission canceled: files opened in Perforce.")
+                self.on_executor_finished_impl()
+                return
+
         # Make sure all the maps in the queue exist on disk somewhere,
         # unsaved maps can't be loaded on the remote machine, and it's common
         # to have the wrong map name if you submit without loading the map.
@@ -650,15 +673,11 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
 
         auxilliary_files = []
 
-        # get PreJobScript and check that it is an existing full path
+        # get PreJobScript and check that it is an existing full path. There is no default
+        # one: the worker applies the job's overrides itself (mrq_rpc / render_jobs).
         pre_job_script = job_info.get('PreJobScript')
         if pre_job_script and not os.path.exists(pre_job_script):
             raise RuntimeError(f"PreJobScript path provided is not a valid path: {pre_job_script}")
-
-        # default PreJobScript is PreJob.py file that is included in this plugin
-        if not pre_job_script:
-            job_info['PreJobScript'] = 'PreJob.py'
-            auxilliary_files.append(os.path.join(os.path.dirname(__file__), "PreJob.py"))
 
         # check for Perforce required field in jobInfo
         environment_key_values = {}
@@ -674,7 +693,11 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
                 current_env_index += 1
 
         # If P4 is enabled, get the latest submitted CL and add it to the job info
-        p4_cl = p4_utils.get_latest_submitted_cl(p4, logger=_UnrealLogger)
+        # The project's latest CL, not the server's (other projects submit too)
+        p4_cl = p4_utils.get_latest_submitted_cl(
+            p4, logger=_UnrealLogger,
+            path=unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir())
+        )
         if not p4_cl:
             unreal.log_warning("⚠️ Latest submitted P4 CL not found; job will have no version info.")
             p4_cl = -1
@@ -872,11 +895,15 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
         job_info["Frames"] = ",".join(frame_list)
         unreal.log(f'frame list: {job_info["Frames"]}')
 
-        # enable frame timeout, so that task timeout changes based on actual frame count
-        # TODO: add on Job Preset object
-        if has_frame_range:
+        # Frame timeouts: the task's timeout is the preset's Task Timeout Seconds per frame
+        # (DEFAULT_FRAME_TIMEOUT when it's 0), times the task's frame count, so it follows
+        # a frame range changed in the Monitor. Bounds a stuck Unreal (hung GPU, endless
+        # load). Shot tasks have no frame count (their frames number the shots): none.
+        if has_frame_range or real_frames:
+            frame_timeout = int(job_info.get("TaskTimeoutSeconds") or 0) or DEFAULT_FRAME_TIMEOUT
+            job_info["TaskTimeoutSeconds"] = str(frame_timeout)
             job_info["EnableFrameTimeouts"] = "1"
-        # not using frame ranges, so increase task timeout
+            unreal.log(f"Frame timeout: {frame_timeout} s per frame")
         else:
             job_info["TaskTimeoutSeconds"] = "0"
             job_info["EnableFrameTimeouts"] = "0"
@@ -1001,7 +1028,8 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
 
 
         # TODO: Resolve path formatting based on render settings to make it understandable by Deadline
-        job_info["OutputDirectory0"] = output_dir
+        # The job's override is where the frames go (the worker sets it on the graph)
+        job_info["OutputDirectory0"] = new_job.output_directory_override.path or output_dir
         # unreal.log(f'✈ output directory: {job_info["OutputDirectory0"]}')
 
         # TODO: Resolve filename format based on render settings to make it understandable by Deadline

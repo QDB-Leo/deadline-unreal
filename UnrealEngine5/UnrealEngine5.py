@@ -71,9 +71,6 @@ class UnrealEnginePlugin(DeadlinePlugin):
         # Keep track of when Job Ended has been called
         self._job_ended = False
 
-        # GPU crash detection
-        self._gpu_crashed = False
-
         # set the plugin to commandline mode by default. This will launch the
         # editor and wait for the process to exit. There is no communication
         # with the deadline process.
@@ -188,10 +185,6 @@ class UnrealEnginePlugin(DeadlinePlugin):
 
             # Start next tasks
             self.LogWarning(f"Starting Task {self.GetCurrentTaskId()}")
-
-            if self._gpu_crashed:
-                self.FailRender("Failing job after GPU crash.")
-                return
 
             # Account for any re-queued jobs. Deadline will immediately execute
             # render tasks if a job has been re-queued on the same process. If
@@ -348,11 +341,20 @@ class UnrealEnginePlugin(DeadlinePlugin):
         Handles any progress reports.
         """
         # handle floating progress using comma as decimal separator
-        progress = float(process.GetRegexMatch(1).replace(",", "."))
+        try:
+            progress = float(process.GetRegexMatch(1).replace(",", "."))
+        except ValueError:
+            # a line the ProgressRegex matched without a number: not a progress report
+            return
         self.SetProgress(progress)
 
-    def flag_gpu_crash(self):
-        self._gpu_crashed = True
+    def current_job(self):
+        """
+        The job as it is now in the repository, to change and save. GetJob() is the job
+        as loaded when the task started: saving it would undo what was changed in the
+        Monitor since (priority, frames, pool...).
+        """
+        return RepositoryUtils.GetJob(self.GetJob().JobId, True)
 
     def snapshot_output_frames(self):
         """
@@ -383,7 +385,7 @@ class UnrealEnginePlugin(DeadlinePlugin):
         i.e. new or changed since before_task (snapshot_output_frames at its start).
         Files from an earlier render of the shot don't count, however recent.
         """
-        job = self.GetJob()
+        job = self.current_job()
         output_dir = job.GetJobExtraInfoKeyValue("output_directory_override")
         if not output_dir or not os.path.isdir(output_dir):
             self.LogWarning(f"[GPU crash] output dir not found: {output_dir}")
@@ -423,7 +425,7 @@ class UnrealEnginePlugin(DeadlinePlugin):
         and remapped frames (Play Rate / Time Warp tracks), where the frames on disk
         aren't the sequence's.
         """
-        job = self.GetJob()
+        job = self.current_job()
         if job.GetJobExtraInfoKeyValue("frame_range_mode") != "inclusive":
             return None
         if job.GetJobExtraInfoKeyValue("frames_remapped") == "1":
@@ -445,11 +447,89 @@ class UnrealEnginePlugin(DeadlinePlugin):
 
     def clear_gpu_crash_resume(self):
         """A finished task no longer resumes: forget its GPU crash resume frame."""
-        job = self.GetJob()
+        job = self.current_job()
         resume = job.GetJobExtraInfoKeyValue("gpu_crash_resume")
         if resume and resume.split(":")[0] == str(self.GetCurrentTaskId()):
             job.SetJobExtraInfoKeyValue("gpu_crash_resume", "")
             RepositoryUtils.SaveJob(job)
+
+
+def resolve_executable(deadline_plugin):
+    """
+    The Unreal executable for the render: the process environment's UnrealExecutable,
+    else the plugin info's Executable, path mapped, `{ProjectRoot}` resolved (set by
+    JobPreLoad). Fails the render if it doesn't exist.
+    """
+    executable = deadline_plugin.GetEnvironmentVariable("UnrealExecutable")
+    if not executable:
+        executable = deadline_plugin.GetPluginInfoEntry("Executable")
+
+    # Resolve any path mappings required
+    executable = RepositoryUtils.CheckPathMapping(executable)
+
+    # JobPreLoad sets ProjectRoot on the process environment (SetProcessEnvironmentVariable)
+    project_root = deadline_plugin.GetProcessEnvironmentVariable("ProjectRoot")
+    if project_root:
+        executable = executable.format(ProjectRoot=project_root)
+
+    if not FileUtils.FileExists(executable):
+        deadline_plugin.FailRender(f"Could not find `{executable}`")
+
+    deadline_plugin.LogInfo(f"Found executable `{executable}`")
+    return executable.replace("\\", "/")
+
+
+def resolve_uproject(deadline_plugin, executable_path):
+    """
+    The .uproject to render: the process environment's UnrealUProject, else the plugin
+    info's ProjectFile, path mapped, `{ProjectRoot}` resolved. A path starting with
+    ../ is looked for under the engine's root. Fails the render if it doesn't exist.
+    :rtype: Path
+    """
+    uproject = deadline_plugin.GetEnvironmentVariable("UnrealUProject")
+    if not uproject:
+        uproject = deadline_plugin.GetPluginInfoEntry("ProjectFile")
+
+    # Get any path mappings required. Expects this to be a full path
+    uproject = RepositoryUtils.CheckPathMapping(uproject)
+
+    project_root = deadline_plugin.GetProcessEnvironmentVariable("ProjectRoot")
+    if project_root:
+        uproject = uproject.format(ProjectRoot=project_root)
+
+    if not uproject:
+        deadline_plugin.FailRender(f"Expected project file but found `{uproject}`")
+
+    uproject = Path(uproject.replace("\u201c", '"').replace("\u201d", '"').replace("\\", "/"))
+
+    # Check to see if the Uproject is a relative path
+    if str(uproject).replace("\\", "/").startswith("../"):
+
+        if not executable_path:
+            deadline_plugin.FailRender("Could not find executable path to resolve relative path.")
+
+        # Find executable root
+        engine_dir = re.findall(r"([\s\S]*.Engine)", executable_path)
+        if not engine_dir:
+            deadline_plugin.FailRender("Could not find executable Engine directory.")
+
+        executable_root = Path(engine_dir[0]).parent
+
+        # Resolve editor relative paths
+        found_paths = sorted(executable_root.rglob(str(uproject).replace("\\", "/").strip("../")))
+
+        if not found_paths or len(found_paths) > 1:
+            deadline_plugin.FailRender(
+                f"Found multiple uprojects relative to the root directory. There should only be one when a relative path is defined."
+            )
+
+        uproject = found_paths[0]
+
+    # make sure the project exists
+    if not FileUtils.FileExists(uproject.as_posix()):
+        deadline_plugin.FailRender(f"Could not find `{uproject.as_posix()}`")
+
+    return uproject
 
 
 class UnrealEngineManagedProcess(ManagedProcess):
@@ -494,7 +574,7 @@ class UnrealEngineManagedProcess(ManagedProcess):
         self._executable_path = None
 
         # Elapsed time to check for connection
-        self._process_wait_time = int(self._deadline_plugin.GetConfigEntryWithDefault("RPCWaitTime", "300"))
+        self._process_wait_time = int(self._deadline_plugin.GetConfigEntryWithDefault("RPCWaitTime", "600"))
 
     def clean_up(self):
         """
@@ -534,6 +614,7 @@ class UnrealEngineManagedProcess(ManagedProcess):
             job = self._deadline_plugin.GetJob()
 
             log_file_dir = os.path.join(
+                logs_dir,
                 job.JobName,
                 f"{job.JobSubmitDateTime.ToUniversalTime()}".replace(" ", "-"),
             )
@@ -593,7 +674,7 @@ class UnrealEngineManagedProcess(ManagedProcess):
         #    this task as terminal Failed (no requeue). The other tasks keep the job's
         #    default retry behavior.
         try:
-            job = plugin.GetJob()
+            job = plugin.current_job()
             task = plugin.GetCurrentTask()
             RepositoryUtils.FailTasks(job, [task])
             RepositoryUtils.SaveJob(job)
@@ -667,47 +748,47 @@ class UnrealEngineManagedProcess(ManagedProcess):
                 )
 
         # if we are connected, wait till the process task is marked as
-        # complete.
-        while not self._temp_rpc_client.is_task_complete(
-            self._deadline_plugin.GetCurrentTaskId()
-        ):
-            # Keep flushing stdout
+        # complete, failing it as soon as Unreal reports a failure or dies.
+        task_id = self._deadline_plugin.GetCurrentTaskId()
+        while not self._temp_rpc_client.is_task_complete(task_id):
+            self._fail_on_reported_failure(task_id)
+
+            # Keep flushing stdout (log handlers, e.g. GPU crash detection, run here)
             self._deadline_plugin.FlushMonitoredManagedProcessStdout(self._name)
+
+            if not self._deadline_plugin.MonitoredManagedProcessIsRunning(self._name):
+                self._deadline_plugin.FailRender(
+                    self._reported_failure(task_id) or f"Unreal exited before finishing task {task_id}."
+                )
+            time.sleep(1)
+
+        # Unreal may report a failure and complete the task in one go
+        self._fail_on_reported_failure(task_id)
 
         # Flush one last time
         self._deadline_plugin.FlushMonitoredManagedProcessStdout(self._name)
+
+    def _reported_failure(self, task_id):
+        """The failure Unreal reported for the task through RPC, empty if none."""
+        try:
+            return self._temp_rpc_client.get_task_failure(task_id)
+        except Exception:
+            # The RPC server is shut down once Unreal has exited
+            return ""
+
+    def _fail_on_reported_failure(self, task_id):
+        """Fails the task, on this thread, if Unreal reported a failure through RPC."""
+        failure = self._reported_failure(task_id)
+        if failure:
+            self._deadline_plugin.FlushMonitoredManagedProcessStdout(self._name)
+            self._deadline_plugin.FailRender(failure)
 
     def _render_executable(self):
         """
         Get the render executable
         """
         self._deadline_plugin.LogInfo("Setting up Render Executable")
-
-        executable = self._deadline_plugin.GetEnvironmentVariable("UnrealExecutable")
-
-        if not executable:
-            executable = self._deadline_plugin.GetPluginInfoEntry("Executable")
-
-        # Resolve any path mappings required
-        executable = RepositoryUtils.CheckPathMapping(executable)
-
-        project_root = self._deadline_plugin.GetEnvironmentVariable("ProjectRoot")
-
-        # If a project root is specified in the environment, it is assumed a
-        # previous process resolves the root location of the executable and
-        # presents it in the environment.
-        if project_root:
-            # Resolve any `{ProjectRoot}` tokens present in the executable path
-            executable = executable.format(ProjectRoot=project_root)
-
-        # Make sure the executable exists
-        if not FileUtils.FileExists(executable):
-            self._deadline_plugin.FailRender(f"Could not find `{executable}`")
-
-        self._executable_path = executable.replace("\\", "/")
-
-        self._deadline_plugin.LogInfo(f"Found executable `{executable}`")
-
+        self._executable_path = resolve_executable(self._deadline_plugin)
         return self._executable_path
 
     def _render_argument(self):
@@ -716,53 +797,7 @@ class UnrealEngineManagedProcess(ManagedProcess):
         """
         self._deadline_plugin.LogInfo("Setting up Render Arguments")
 
-        # Look for any unreal uproject paths in the process environment. This
-        # assumes a previous process resolves a uproject path and makes it
-        # available.
-        uproject = self._deadline_plugin.GetEnvironmentVariable("UnrealUProject")
-
-        if not uproject:
-            uproject = self._deadline_plugin.GetPluginInfoEntry("ProjectFile")
-
-        # Get any path mappings required. Expects this to be a full path
-        uproject = RepositoryUtils.CheckPathMapping(uproject)
-
-        # Get the project root path
-        project_root = self._deadline_plugin.GetEnvironmentVariable("ProjectRoot")
-
-        # Resolve any `{ProjectRoot}` tokens in the environment
-        if project_root:
-            uproject = uproject.format(ProjectRoot=project_root)
-
-        uproject = Path(uproject.replace("\\", "/"))
-
-        # Check to see if the Uproject is a relative path
-        if str(uproject).replace("\\", "/").startswith("../"):
-
-            if not self._executable_path:
-                self._deadline_plugin.FailRender("Could not find executable path to resolve relative path.")
-
-            # Find executable root
-            import re
-            engine_dir = re.findall("([\s\S]*.Engine)", self._executable_path)
-            if not engine_dir:
-                self._deadline_plugin.FailRender("Could not find executable Engine directory.")
-
-            executable_root = Path(engine_dir[0]).parent
-
-            # Resolve editor relative paths
-            found_paths = sorted(executable_root.rglob(str(uproject).replace("\\", "/").strip("../")))
-
-            if not found_paths or len(found_paths) > 1:
-                self._deadline_plugin.FailRender(
-                    f"Found multiple uprojects relative to the root directory. There should only be one when a relative path is defined."
-                )
-
-            uproject = found_paths[0]
-
-        # make sure the project exists
-        if not FileUtils.FileExists(uproject.as_posix()):
-            self._deadline_plugin.FailRender(f"Could not find `{uproject.as_posix()}`")
+        uproject = resolve_uproject(self._deadline_plugin, self._executable_path)
 
         # Set up the arguments to startup unreal.
         job_command_args = [
@@ -889,37 +924,8 @@ class UnrealEngineCmdManagedProcess(ManagedProcess):
         """
         Get the render executable
         """
-
         self._deadline_plugin.LogInfo("Setting up Render Executable")
-
-        executable = self._deadline_plugin.GetEnvironmentVariable("UnrealExecutable")
-
-        if not executable:
-            executable = self._deadline_plugin.GetPluginInfoEntry("Executable")
-
-        # Get the executable from the plugin
-        executable = RepositoryUtils.CheckPathMapping(executable)
-        # Get the project root path
-        project_root = self._deadline_plugin.GetProcessEnvironmentVariable(
-            "ProjectRoot"
-        )
-
-        # Resolve any `{ProjectRoot}` tokens in the environment
-        if project_root:
-            executable = executable.format(ProjectRoot=project_root)
-
-        if not FileUtils.FileExists(executable):
-            self._deadline_plugin.FailRender(
-                "{executable} could not be found".format(executable=executable)
-            )
-
-        # TODO: Setup getting executable from the config as well
-
-        self._deadline_plugin.LogInfo(
-            "Render Executable: {exe}".format(exe=executable)
-        )
-        self._executable_path = executable.replace("\\", "/")
-
+        self._executable_path = resolve_executable(self._deadline_plugin)
         return self._executable_path
 
     def _render_argument(self):
@@ -929,62 +935,7 @@ class UnrealEngineCmdManagedProcess(ManagedProcess):
         """
         self._deadline_plugin.LogInfo("Setting up Render Arguments")
 
-        # Look for any unreal uproject paths in the process environment. This
-        # assumes a previous process resolves a uproject path and makes it
-        # available.
-        project_file = self._deadline_plugin.GetEnvironmentVariable("UnrealUProject")
-
-        if not project_file:
-            project_file = self._deadline_plugin.GetPluginInfoEntry("ProjectFile")
-
-        # Get any path mappings required. Expects this to be a full path
-        project_file = RepositoryUtils.CheckPathMapping(project_file)
-
-        # Get the project root path
-        project_root = self._deadline_plugin.GetProcessEnvironmentVariable(
-            "ProjectRoot"
-        )
-
-        # Resolve any `{ProjectRoot}` tokens in the environment
-        if project_root:
-            project_file = project_file.format(ProjectRoot=project_root)
-
-        if not project_file:
-            self._deadline_plugin.FailRender(
-                f"Expected project file but found `{project_file}`"
-            )
-
-        project_file = Path(project_file.replace("\u201c", '"').replace(
-            "\u201d", '"'
-        ).replace("\\", "/"))
-
-        # Check to see if the Uproject is a relative path
-        if str(project_file).replace("\\", "/").startswith("../"):
-
-            if not self._executable_path:
-                self._deadline_plugin.FailRender("Could not find executable path to resolve relative path.")
-
-            # Find executable root
-            import re
-            engine_dir = re.findall("([\s\S]*.Engine)", self._executable_path)
-            if not engine_dir:
-                self._deadline_plugin.FailRender("Could not find executable Engine directory.")
-
-            executable_root = Path(engine_dir[0]).parent
-
-            # Resolve editor relative paths
-            found_paths = sorted(executable_root.rglob(str(project_file).replace("\\", "/").strip("../")))
-
-            if not found_paths or len(found_paths) > 1:
-                self._deadline_plugin.FailRender(
-                    f"Found multiple uprojects relative to the root directory. There should only be one when a relative path is defined."
-                )
-
-            project_file = found_paths[0]
-
-        # make sure the project exists
-        if not FileUtils.FileExists(project_file.as_posix()):
-            self._deadline_plugin.FailRender(f"Could not find `{project_file.as_posix()}`")
+        project_file = resolve_uproject(self._deadline_plugin, self._executable_path)
 
         # Get the render arguments
         args = RepositoryUtils.CheckPathMapping(
@@ -1002,7 +953,6 @@ class UnrealEngineCmdManagedProcess(ManagedProcess):
         # write manifest file based on job infos
         manifest_filepath = DeadlineUnrealUtils.write_manifest_file(
             self._deadline_plugin,
-            for_cmdline=True,
             project_root=os.path.dirname(project_file)
         )
 

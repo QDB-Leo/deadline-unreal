@@ -104,7 +104,8 @@ class DeadlineCommand:
         job_info = [k+'='+v.replace("\n","").replace("\r","").replace("\t","")+'\n' for k, v in job_data["JobInfo"].items()]
         plugin_info = [k+'='+v.replace("\n","").replace("\r","").replace("\t","")+'\n' for k, v in job_data["PluginInfo"].items()]
 
-        with tempfile.NamedTemporaryFile(mode = "w", delete=False) as f_job, tempfile.NamedTemporaryFile(mode = "w", delete=False) as f_plugin:
+        # UTF-8, not the Windows code page: names, comments and paths may have any accent
+        with tempfile.NamedTemporaryFile(mode = "w", encoding="utf-8", delete=False) as f_job, tempfile.NamedTemporaryFile(mode = "w", encoding="utf-8", delete=False) as f_plugin:
             logger.debug(f"Creating temporary job file {f_job.name}")
             logger.debug(f"Creating temporary plugin file {f_plugin.name}")
             f_job.writelines(job_info)
@@ -119,22 +120,27 @@ class DeadlineCommand:
             logger.debug(f"Submitting job via deadlinecommand with subprocess args: {args}")
             proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=startupinfo)
             
+            # communicate() reads stdout and stderr while waiting: wait() then read could
+            # block once deadlinecommand fills a pipe
+            output, errors = proc.communicate()
+
             # On windows machines Temproary files cannot be opened by multiple processes so we cann use the delete=True flag and must clean up the tmp files ourselves.
             # https://docs.python.org/3/library/tempfile.html#tempfile.NamedTemporaryFile
-            proc.wait()
             os.remove(f_job.name)
             os.remove(f_plugin.name)
             logger.debug(f"Removed temporary job file {f_job.name}")
             logger.debug(f"Removed temporary plugin file {f_plugin.name}")
 
-
-        proc.stdin.close()
-        proc.stderr.close()
-
-        output = proc.stdout.read()
+        output = output.decode("utf_8", errors="replace")
         job_ids = []
-        for line in output.decode("utf_8").split(os.linesep):
+        for line in output.split(os.linesep):
             if line.startswith("JobID"):
                 job_ids.append(line.split("=")[1].strip())
 
+        if not job_ids:
+            # Hand over what Deadline said, or the submission fails without a reason
+            raise RuntimeError(
+                f"deadlinecommand returned no JobID (exit {proc.returncode}):\n"
+                f"{output.strip()}\n{errors.decode('utf_8', errors='replace').strip()}"
+            )
         return min(job_ids)

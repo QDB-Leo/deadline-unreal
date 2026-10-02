@@ -71,11 +71,23 @@ function Invoke-Native {
     param([string]$Exe, [string[]]$Arguments, [string[]]$InputLines)
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
+    # Piped input gets a UTF-8 BOM when the console encoding is UTF-8 (p4 then
+    # reads the first spec field as '﻿Change'): pipe it without one.
+    $prevOutput, $prevInput = $OutputEncoding, [Console]::InputEncoding
     try {
-        if ($InputLines) { $out = $InputLines | & $Exe @Arguments 2>&1 }
+        if ($InputLines) {
+            $noBom = New-Object System.Text.UTF8Encoding $false
+            $OutputEncoding = $noBom
+            [Console]::InputEncoding = $noBom
+            $out = $InputLines | & $Exe @Arguments 2>&1
+        }
         else { $out = & $Exe @Arguments 2>&1 }
     }
-    finally { $ErrorActionPreference = $prev }
+    finally {
+        $ErrorActionPreference = $prev
+        $OutputEncoding = $prevOutput
+        [Console]::InputEncoding = $prevInput
+    }
     $code = $LASTEXITCODE
     $lines = @($out | ForEach-Object { "$_" })
     if ($code -ne 0) { throw "$Exe $($Arguments -join ' ') failed (exit $code):`n$($lines -join "`n")" }

@@ -16,13 +16,7 @@ from deadline_job import DeadlineJob
 from deadline_utils import get_deadline_info_from_preset
 
 import p4_utils
-from mrq_cli_modes.utils import get_output_node_range
-
-try:
-    import kitsu_utils
-    _has_kitsu = True
-except ImportError:
-    _has_kitsu = False
+from mrq_cli_modes.utils import find_graph_variable, get_graph_variable_value, get_output_node_range
 
 
 project_root = unreal.Paths.project_dir()
@@ -113,10 +107,11 @@ def get_mrg_resolution(graph, job=None):
     return None
 
 
-def get_mrg_frame_range(graph, job=None):
+def get_mrg_frame_range(graph, job):
     """
-    Reads the 'Start'/'End' variables exposed by the graph (taking per-job
-    overrides into account). This is the SAME control point that
+    Reads the 'Start'/'End' variables exposed by the graph or, absent there, by
+    one of its subgraphs (e.g. a parent graph), with the job's checked overrides
+    (get_graph_variable_value). This is the SAME control point that
     apply_frame_range_override rewrites on the worker side, so reading it here
     lets us seed Deadline's Frames field (and the original_frame_range metadata)
     with the range the artist actually set on the job.
@@ -130,9 +125,9 @@ def get_mrg_frame_range(graph, job=None):
     if not graph:
         return None
 
-    variables = {v.get_member_name(): v for v in graph.get_variables()}
-    start_var, end_var = variables.get("Start"), variables.get("End")
-    if not start_var or not end_var:
+    start_var, _, owner = find_graph_variable(job, graph, "Start")
+    end_var, _, end_owner = find_graph_variable(job, graph, "End")
+    if not start_var or not end_var or end_owner != owner:
         node_range = get_output_node_range(graph)
         if node_range:
             unreal.log(f"🎬 Frame range from the graph's Global Output node: {node_range[0]}-{node_range[1]}")
@@ -142,21 +137,10 @@ def get_mrg_frame_range(graph, job=None):
             "falling back to the sequence's playback range."
         )
         return None
+    unreal.log(f"🔍 'Start'/'End' variables from `{owner.get_name()}`")
 
     def read_serialized(var):
-        # Job override takes priority if enabled, otherwise the variable's default value.
-        if job:
-            try:
-                overrides = job.get_or_create_variable_overrides(graph)
-                if overrides.get_variable_assignment_enable_state(var):
-                    val = overrides.get_value_serialized_string(var)
-                    if val:
-                        return val
-            except Exception as e:
-                unreal.log_warning(
-                    f"⚠️ Could not read override for '{var.get_member_name()}': {e}"
-                )
-        return var.get_value_serialized_string()
+        return get_graph_variable_value(job, graph, var.get_member_name())
 
     def parse_bound(serialized):
         # A MovieGraphSequencePlaybackRangeBound serializes as
@@ -943,18 +927,14 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
         # --- Temporal Sample Count (Movie Render Graph variable) ---
         # Reads "TemporalSampleCount" int variable from the graph preset if it exists,
         # and exposes it in ExtraInfo0 for visibility in Deadline Monitor.
+        # The job's checked override, else the variable's value, in the graph or else a
+        # subgraph (get_graph_variable_value): an unchecked override isn't what renders.
         temporal_sample_count = None
         graph_config = job.get_graph_preset()
-        if graph_config and _has_kitsu:
-            temporal_sample_var, temporal_sample_overrides = kitsu_utils.get_variable_from_graph(
-                new_job, graph_config, "TemporalSampleCount"
-            )
-            if temporal_sample_var and temporal_sample_overrides:
-                serialized = temporal_sample_overrides.get_value_serialized_string(temporal_sample_var)
-                if not serialized:
-                    # fallback: read the default value of the variable itself
-                    serialized = temporal_sample_var.get_value_serialized_string()
-                temporal_sample_count = int(serialized) if serialized else None
+        if graph_config:
+            serialized = get_graph_variable_value(new_job, graph_config, "TemporalSampleCount")
+            if serialized:
+                temporal_sample_count = int(serialized)
                 unreal.log(f"🎞 TemporalSampleCount from graph: {temporal_sample_count}")
             else:
                 unreal.log_warning("⚠️ Variable 'TemporalSampleCount' not found in graph preset")

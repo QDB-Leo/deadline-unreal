@@ -6,10 +6,11 @@ This is still a WIP but helps me a lot. I'm using it with UE 5.6 and 5.7
 
 Major changes from DwarfLabs version :
 - Supports MRG, retrieves correct resolution from either job override, node value or subgraph
+  Graph variables the plugin reads or sets (`Start`/`End`, `TemporalSampleCount`) follow the render's precedence: in the job's graph, the job override if checked, else the variable's value; absent from the job's graph, the same in the first subgraph that has it (e.g. a parent graph). An unchecked override is never used. Everything the render needs travels in the job's serialized manifest; what the plugin computes (Deadline frames, `-ResX/-ResY`, the temporal samples shown in the Monitor) mirrors it.
 - Render progress tracking inside Deadline Task
 - Changed handling of P4 connection (ticket-based), syncs to head by default
 - FrameRange override support, so you can change framerange inside Deadline and requeue. Used in conjonction with a perforce change pushed to depot so you don't have to resubmit a job.
-  The job's frames are the sequence's frames, last one included (a 10-frame shot starting at 0 is `0-9`). The worker applies them through the graph's `Start`/`End` variables, or the Global Output node's custom playback range when the graph has no such variables. Sequences with a shot track get one task per shot, whose frames only number the shots: no override for those.
+  The job's frames are the sequence's frames, last one included (a 10-frame shot starting at 0 is `0-9`). The worker applies them through the `Start`/`End` variables (job's graph, or else a subgraph), or the Global Output node's custom playback range when the graph has no such variables. Sequences with a shot track get one task per shot, whose frames only number the shots: no override for those.
 - GPU crash detection (editor mode): on a D3D/DXGI crash line in Unreal's log, the task fails and Deadline requeues it, and the next attempt resumes from the last frame the task wrote (rendered again, its write may be cut). The job shows it as `lastframerendered`. Sequences with a Play Rate or Time Warp track (`frames_remapped=1`) and shot tasks don't resume: their task is failed for good.
 
 Todo :

@@ -370,12 +370,47 @@ def update_queue(
         set_job_state(job, enable=enable_job)
 
 
+def find_graph_variable(job, graph, name):
+    """
+    Where the value of the graph variable `name` comes from, for this job:
+    the job's graph if it has the variable, otherwise the first of its subgraphs
+    (e.g. a parent graph) that has it. Its value there is the job override if
+    checked, otherwise the variable's own value (see get_graph_variable_value).
+
+    :returns: (variable, job overrides container of that graph, graph), or
+              (None, None, None) when no graph has the variable
+    """
+    for candidate in [graph] + list(graph.get_all_contained_subgraphs()):
+        variable = candidate.get_variable_by_name(name)
+        if variable:
+            return variable, job.get_or_create_variable_overrides(candidate), candidate
+    return None, None, None
+
+
+def get_graph_variable_value(job, graph, name):
+    """
+    Serialized value of the graph variable `name` for this job, by precedence:
+    1. the job override, if checked, of the variable in the job's graph;
+    2. that variable's own value;
+    3. the variable absent from the job's graph: the same in the first subgraph
+       that has it.
+    An unchecked override's value is never used. None when no graph has it.
+    """
+    variable, overrides, _ = find_graph_variable(job, graph, name)
+    if not variable:
+        return None
+    if overrides.get_variable_assignment_enable_state(variable):
+        return overrides.get_value_serialized_string(variable)
+    return variable.get_value_serialized_string()
+
+
 def apply_frame_range_override(job, start_frame, end_frame, use_output_node=False):
     """
     Override a graph job's playback range via its user-exposed `Start`/`End`
-    variables (per-job override). Without those variables and with
-    use_output_node, the range goes on the graph's Global Output node instead.
-    end_frame is exclusive, as in the graph.
+    variables (checked job override), on the graph that has them: the job's
+    graph, or else the subgraph found by find_graph_variable. Without those
+    variables and with use_output_node, the range goes on the graph's Global
+    Output node instead. end_frame is exclusive, as in the graph.
     """
     graph = job.get_graph_preset()
     if not graph:
@@ -384,18 +419,17 @@ def apply_frame_range_override(job, start_frame, end_frame, use_output_node=Fals
         )
         return False
 
-    variables = {v.get_member_name(): v for v in graph.get_variables()}
-    start_var, end_var = variables.get("Start"), variables.get("End")
-    if not start_var or not end_var:
+    start_var, overrides, owner = find_graph_variable(job, graph, "Start")
+    end_var, _, end_owner = find_graph_variable(job, graph, "End")
+    if not start_var or not end_var or end_owner != owner:
         if use_output_node:
             return _set_output_node_range(graph, start_frame, end_frame)
         unreal.log_warning(
-            f"Graph does not expose 'Start'/'End' variables "
-            f"(found: {list(variables)}) - cannot apply frame range override."
+            f"Neither the graph nor its subgraphs expose both 'Start' and 'End' "
+            f"variables - cannot apply frame range override."
         )
         return False
-
-    overrides = job.get_or_create_variable_overrides(graph)
+    unreal.log(f"Frame range override through the 'Start'/'End' variables of `{owner.get_name()}`")
 
     new_start = _set_range_variable(overrides, start_var, start_frame)
     new_end = _set_range_variable(overrides, end_var, end_frame)

@@ -2,6 +2,7 @@
 #  Copyright Epic Games, Inc. All Rights Reserved
 
 import os
+import re
 import time
 import sys
 from datetime import datetime
@@ -237,6 +238,9 @@ class UnrealEnginePlugin(DeadlinePlugin):
             # Execute the render task
             self.unreal_managed_process.render_task()
 
+            # Done: a later requeue of this task starts from its first frame again
+            self.clear_gpu_crash_resume()
+
             self.LogWarning(f"Finished Task {self.GetCurrentTaskId()}")
             self.FlushMonitoredManagedProcessStdout(self._unreal_process_name)
 
@@ -333,9 +337,11 @@ class UnrealEnginePlugin(DeadlinePlugin):
             r"|DXGI_ERROR_DEVICE_(REMOVED|HUNG)"
             r"|GPU Crash dump Triggered)"
         )
-        process.AddStdoutHandlerCallback(
-            gpu_crash_regex
-        ).HandleCallback += process._handle_gpu_crash
+        # Only the editor (RPC) process handles it, the commandline one has no handler
+        if hasattr(process, "_handle_gpu_crash"):
+            process.AddStdoutHandlerCallback(
+                gpu_crash_regex
+            ).HandleCallback += process._handle_gpu_crash
 
     def generic_handle_progress(self, process):
         """
@@ -348,47 +354,56 @@ class UnrealEnginePlugin(DeadlinePlugin):
     def flag_gpu_crash(self):
         self._gpu_crashed = True
 
-    def record_last_rendered_frame(self, since_epoch=None, window_minutes=15):
+    def snapshot_output_frames(self):
+        """
+        {path: mtime} of the frame files already in the job's output directory. Taken
+        when a task starts, so a GPU crash can tell the frames this task wrote from
+        older ones, without comparing clocks (the output may be on a file server).
+        """
+        snapshot = {}
+        output_dir = self.GetJob().GetJobExtraInfoKeyValue("output_directory_override")
+        if not output_dir or not os.path.isdir(output_dir):
+            return snapshot
+        for root, _, files in os.walk(output_dir):
+            for name in files:
+                # frame files: the name ends with digits, whatever the padding
+                if not re.search(r"\d+$", os.path.splitext(name)[0]):
+                    continue
+                path = os.path.join(root, name)
+                try:
+                    snapshot[path] = os.path.getmtime(path)
+                except OSError:
+                    continue
+        return snapshot
+
+    def record_last_rendered_frame(self, before_task=None):
         """
         Writes lastframerendered + lastframerenderedtime into the job's ExtraInfo.
-        Source of truth = the disk. We only keep files written since the start
-        of the session (since_epoch), so we don't confuse them with an old
-        version of an overwritten shot.
+        Source of truth = the disk: the highest frame among the files this task wrote,
+        i.e. new or changed since before_task (snapshot_output_frames at its start).
+        Files from an earlier render of the shot don't count, however recent.
         """
         job = self.GetJob()
         output_dir = job.GetJobExtraInfoKeyValue("output_directory_override")
         if not output_dir or not os.path.isdir(output_dir):
             self.LogWarning(f"[GPU crash] output dir not found: {output_dir}")
             return None
-
-        # Time anchor: session start if known (- margin), otherwise a sliding window
-        if since_epoch is not None:
-            threshold = since_epoch - 120  # 2 min margin
-        else:
-            threshold = time.time() - window_minutes * 60
+        if before_task is None:
+            self.LogWarning("[GPU crash] no snapshot of the output from the task start.")
+            return None
 
         last_frame = None
         last_mtime = None
-        for root, _, files in os.walk(output_dir):
-            for name in files:
-                path = os.path.join(root, name)
-                try:
-                    mtime = os.path.getmtime(path)
-                except OSError:
-                    continue
-                if mtime < threshold:
-                    continue  # older version, ignore
-
-                tail = os.path.splitext(name)[0][-4:]  # frame = 4 last chars
-                if not tail.isdigit():
-                    continue
-                frame = int(tail)
-                if last_frame is None or frame > last_frame:
-                    last_frame = frame
-                    last_mtime = mtime
+        for path, mtime in self.snapshot_output_frames().items():
+            if before_task.get(path) == mtime:
+                continue  # already there before this task: not written by it
+            frame = int(re.search(r"(\d+)$", os.path.splitext(os.path.basename(path))[0]).group(1))
+            if last_frame is None or frame > last_frame:
+                last_frame = frame
+                last_mtime = mtime
 
         if last_frame is None:
-            self.LogWarning("[GPU crash] no recent frame found on disk.")
+            self.LogWarning("[GPU crash] no frame written by this task found on disk.")
             return None
 
         iso = datetime.fromtimestamp(last_mtime).isoformat()
@@ -397,6 +412,44 @@ class UnrealEnginePlugin(DeadlinePlugin):
         RepositoryUtils.SaveJob(job)
         self.LogInfo(f"[GPU crash] lastframerendered={last_frame} (mtime={iso})")
         return last_frame
+
+    def plan_gpu_crash_resume(self, last_frame):
+        """
+        After a GPU crash, stores where the next attempt of the current task resumes,
+        as job extra info gpu_crash_resume = "<task id>:<task frames>:<frame>" (read by
+        mrq_rpc), and returns that frame. The last frame on disk is rendered again, the
+        crash may have cut its write.
+        None when the task can't resume: shot tasks, whose frames only number the shots,
+        and remapped frames (Play Rate / Time Warp tracks), where the frames on disk
+        aren't the sequence's.
+        """
+        job = self.GetJob()
+        if job.GetJobExtraInfoKeyValue("frame_range_mode") != "inclusive":
+            return None
+        if job.GetJobExtraInfoKeyValue("frames_remapped") == "1":
+            return None
+
+        task_id = str(self.GetCurrentTaskId())
+        frames = f"{self.GetStartFrame()}-{self.GetEndFrame()}"
+        resume = self.GetStartFrame()
+        # A previous crash of this same task (same frames) already moved the start
+        previous = (job.GetJobExtraInfoKeyValue("gpu_crash_resume") or "").split(":")
+        if len(previous) == 3 and previous[:2] == [task_id, frames]:
+            resume = int(previous[2])
+        if last_frame is not None and resume < last_frame <= self.GetEndFrame():
+            resume = last_frame
+
+        job.SetJobExtraInfoKeyValue("gpu_crash_resume", f"{task_id}:{frames}:{resume}")
+        RepositoryUtils.SaveJob(job)
+        return resume
+
+    def clear_gpu_crash_resume(self):
+        """A finished task no longer resumes: forget its GPU crash resume frame."""
+        job = self.GetJob()
+        resume = job.GetJobExtraInfoKeyValue("gpu_crash_resume")
+        if resume and resume.split(":")[0] == str(self.GetCurrentTaskId()):
+            job.SetJobExtraInfoKeyValue("gpu_crash_resume", "")
+            RepositoryUtils.SaveJob(job)
 
 
 class UnrealEngineManagedProcess(ManagedProcess):
@@ -517,14 +570,28 @@ class UnrealEngineManagedProcess(ManagedProcess):
         # 1. Record the last OK frame (from disk)
         try:
             last = plugin.record_last_rendered_frame(
-                since_epoch=getattr(self, "_render_start_time", None)
+                before_task=getattr(self, "_output_before_task", None)
             )
         except Exception as e:
             plugin.LogWarning(f"Failed to record lastframe: {e}")
             last = None
 
-        # 2. Mark ONLY this task as terminal Failed (no requeue).
-        #    The other tasks keep the job's default retry behavior.
+        # 2. Resume: Deadline requeues the task after this error, and its next attempt
+        #    (on any worker) carries on from the last frame instead of starting over.
+        try:
+            resume = plugin.plan_gpu_crash_resume(last)
+        except Exception as e:
+            plugin.LogWarning(f"Could not plan the resume after the GPU crash: {e}")
+            resume = None
+        if resume is not None:
+            plugin.FailRender(
+                f"GPU crash, last frame on disk: {last}. The next attempt resumes at frame {resume}.\n{line}"
+            )
+            return
+
+        # 3. No resume possible (shot tasks, Play Rate / Time Warp tracks): mark ONLY
+        #    this task as terminal Failed (no requeue). The other tasks keep the job's
+        #    default retry behavior.
         try:
             job = plugin.GetJob()
             task = plugin.GetCurrentTask()
@@ -534,7 +601,7 @@ class UnrealEngineManagedProcess(ManagedProcess):
         except Exception as e:
             plugin.LogWarning(f"Could not mark the task as Failed: {e}")
 
-        # 3. Exit the is_task_complete loop and end the plugin processing.
+        # 4. Exit the is_task_complete loop and end the plugin processing.
         plugin.FailRender(f"GPU crash — last OK frame: {last}.\n{line}")
 
     def _handle_progress(self):
@@ -555,6 +622,13 @@ class UnrealEngineManagedProcess(ManagedProcess):
         # Start a timer to monitor the process time
         start_time = time.time()
         self._render_start_time = start_time
+
+        # Frames already on disk, so a GPU crash can tell which ones this task wrote
+        try:
+            self._output_before_task = self._deadline_plugin.snapshot_output_frames()
+        except Exception as e:
+            self._output_before_task = None
+            self._deadline_plugin.LogWarning(f"Could not list the output frames: {e}")
 
         # Get temp client connection
         if not self._temp_rpc_client:

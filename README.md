@@ -10,9 +10,10 @@ Major changes from DwarfLabs version :
 - Changed handling of P4 connection (ticket-based), syncs to head by default
 - FrameRange override support, so you can change framerange inside Deadline and requeue. Used in conjonction with a perforce change pushed to depot so you don't have to resubmit a job.
   The job's frames are the sequence's frames, last one included (a 10-frame shot starting at 0 is `0-9`). The worker applies them through the graph's `Start`/`End` variables, or the Global Output node's custom playback range when the graph has no such variables. Sequences with a shot track get one task per shot, whose frames only number the shots: no override for those.
+- GPU crash detection (editor mode): on a D3D/DXGI crash line in Unreal's log, the task fails and Deadline requeues it, and the next attempt resumes from the last frame the task wrote (rendered again, its write may be cut). The job shows it as `lastframerendered`. Sequences with a Play Rate or Time Warp track (`frames_remapped=1`) and shot tasks don't resume: their task is failed for good.
 
 Todo :
-- GPU crash detection
+- GPU crash resume for sequences with a Play Rate / Time Warp track: map the output frames back to the sequence's
 
 
 Binaries for Unreal Plugins are provided as they can't be automatically generated as usual

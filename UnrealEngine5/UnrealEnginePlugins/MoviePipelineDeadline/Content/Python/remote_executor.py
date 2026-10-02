@@ -928,6 +928,18 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
         job_info[f"ExtraInfoKeyValue{current_index}"] = f"frame_range_mode={'inclusive' if real_frames else 'shots'}"
         current_index += 1
 
+        # Play Rate (time dilation) and Time Warp tracks: the output frames no longer match
+        # the sequence's, so the worker can't resume a task after a GPU crash from the
+        # frames found on disk. TODO: map output frames back to sequence frames.
+        frames_remapped = any(
+            sequence.find_tracks_by_exact_type(track_class)
+            for track_class in (unreal.MovieSceneSlomoTrack, unreal.MovieSceneTimeWarpTrack)
+        )
+        if frames_remapped:
+            unreal.log_warning("⚠️ Play Rate / Time Warp track in the sequence: no resume after a GPU crash")
+        job_info[f"ExtraInfoKeyValue{current_index}"] = f"frames_remapped={int(frames_remapped)}"
+        current_index += 1
+
         # --- Temporal Sample Count (Movie Render Graph variable) ---
         # Reads "TemporalSampleCount" int variable from the graph preset if it exists,
         # and exposes it in ExtraInfo0 for visibility in Deadline Monitor.

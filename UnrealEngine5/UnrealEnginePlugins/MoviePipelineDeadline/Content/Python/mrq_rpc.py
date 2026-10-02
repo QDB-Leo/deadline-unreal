@@ -164,6 +164,13 @@ class MRQRender(BaseRPC):
                 start, end = (int(frame) for frame in self.proxy.get_task_frames())
                 unreal.log(f"Task frame range from Deadline: {start}-{end} (mode: {frame_range_mode or 'legacy'})")
                 if frame_range_mode == "inclusive":
+                    # A GPU crash stopped an earlier attempt of this task (same frames):
+                    # carry on from where it got ("<task id>:<task frames>:<frame>",
+                    # set by the Deadline plugin)
+                    resume = (self.proxy.get_job_extra_info_key_value("gpu_crash_resume") or "").split(":")
+                    if len(resume) == 3 and resume[:2] == [str(self.current_task_id), f"{start}-{end}"]:
+                        unreal.log(f"Resuming after a GPU crash at frame {resume[2]}")
+                        start = int(resume[2])
                     # (start, end exclusive, use the Global Output node without Start/End)
                     frame_range_override = (start, end + 1, True)
                 else:

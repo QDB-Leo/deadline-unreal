@@ -370,10 +370,12 @@ def update_queue(
         set_job_state(job, enable=enable_job)
 
 
-def apply_frame_range_override(job, start_frame, end_frame):
+def apply_frame_range_override(job, start_frame, end_frame, use_output_node=False):
     """
     Override a graph job's playback range via its user-exposed `Start`/`End`
-    variables (per-job override).
+    variables (per-job override). Without those variables and with
+    use_output_node, the range goes on the graph's Global Output node instead.
+    end_frame is exclusive, as in the graph.
     """
     graph = job.get_graph_preset()
     if not graph:
@@ -385,10 +387,11 @@ def apply_frame_range_override(job, start_frame, end_frame):
     variables = {v.get_member_name(): v for v in graph.get_variables()}
     start_var, end_var = variables.get("Start"), variables.get("End")
     if not start_var or not end_var:
+        if use_output_node:
+            return _set_output_node_range(graph, start_frame, end_frame)
         unreal.log_warning(
             f"Graph does not expose 'Start'/'End' variables "
             f"(found: {list(variables)}) - cannot apply frame range override."
-            #todo : fallback to setting the range on the output settings node ?
         )
         return False
 
@@ -402,6 +405,49 @@ def apply_frame_range_override(job, start_frame, end_frame):
         f"(Start ={new_start}, End ={new_end})"
     )
     return new_start and new_end
+
+
+def _set_output_node_range(graph, start_frame, end_frame):
+    """
+    Set the custom playback range on the graph's Global Output node(s), for
+    graphs without `Start`/`End` variables. Changes the loaded graph only (it is
+    not saved), which is what the worker renders.
+    """
+    nodes = graph.get_nodes_for_branch(unreal.MovieGraphGlobalOutputSettingNode, "Globals", False)
+    if not nodes:
+        unreal.log_warning(
+            "Graph has neither 'Start'/'End' variables nor a Global Output node "
+            "in Globals - cannot apply frame range override."
+        )
+        return False
+
+    for node in nodes:
+        for prop, frame in (("custom_playback_range_start", start_frame),
+                            ("custom_playback_range_end", end_frame)):
+            # Type MUST be Custom, as for the variables
+            node.set_editor_property(prop, unreal.MovieGraphSequencePlaybackRangeBound(
+                type=unreal.MovieGraphSequenceRangeType.CUSTOM, value=int(frame)))
+            node.set_editor_property(f"override_{prop}", True)
+
+    unreal.log(f"Frame range override on the Global Output node: {start_frame}-{end_frame} (end exclusive)")
+    return True
+
+
+def get_output_node_range(graph):
+    """
+    Custom playback range set on the graph's Global Output node, as (start, end)
+    with end exclusive, or None when the node doesn't override both bounds.
+    """
+    for node in graph.get_nodes_for_branch(unreal.MovieGraphGlobalOutputSettingNode, "Globals", False):
+        bounds = []
+        for prop in ("custom_playback_range_start", "custom_playback_range_end"):
+            bound = node.get_editor_property(prop)
+            if not node.get_editor_property(f"override_{prop}") or bound.type != unreal.MovieGraphSequenceRangeType.CUSTOM:
+                break
+            bounds.append(bound.value)
+        else:
+            return tuple(bounds)
+    return None
 
 
 def _set_range_variable(overrides, variable, frame_value):

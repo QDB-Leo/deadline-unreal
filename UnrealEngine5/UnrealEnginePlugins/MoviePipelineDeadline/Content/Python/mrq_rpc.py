@@ -153,20 +153,31 @@ class MRQRender(BaseRPC):
         unreal.log_warning(f"---------- Rendering shots: {shots} ----------")
 
         # Read the (possibly overridden) frame range for this task.
+        # frame_range_mode is set at submission: "inclusive" = the task frames are
+        # the sequence's frames, end included; "shots" = they only number the shots,
+        # no override. Jobs submitted before it have none: their end is exclusive and
+        # only a graph's Start/End variables take the override.
+        frame_range_mode = self.proxy.get_job_extra_info_key_value("frame_range_mode")
         frame_range_override = None
-        try:
-            start, end = self.proxy.get_task_frames()
-            frame_range_override = (int(start), int(end))
-            unreal.log(f"Task frame range from Deadline: {start}-{end}")
-        except Exception as err:
-            unreal.log_warning(f"Could not read task frames from Deadline: {err}")
+        if frame_range_mode != "shots":
+            try:
+                start, end = (int(frame) for frame in self.proxy.get_task_frames())
+                unreal.log(f"Task frame range from Deadline: {start}-{end} (mode: {frame_range_mode or 'legacy'})")
+                if frame_range_mode == "inclusive":
+                    # (start, end exclusive, use the Global Output node without Start/End)
+                    frame_range_override = (start, end + 1, True)
+                else:
+                    frame_range_override = (start, end)
+            except Exception as err:
+                unreal.log_warning(f"Could not read task frames from Deadline: {err}")
 
         if self._get_queue():
             return self.render_queue(
                 self._get_queue(),
                 shots,
                 output_dir_override=output_dir if output_dir else None,
-                filename_format_override=filename_format if filename_format else None
+                filename_format_override=filename_format if filename_format else None,
+                frame_range_override=frame_range_override
             )
 
         if self._get_serialized_pipeline():
@@ -197,7 +208,8 @@ class MRQRender(BaseRPC):
         queue_path,
         shots,
         output_dir_override=None,
-        filename_format_override=None
+        filename_format_override=None,
+        frame_range_override=None
     ):
         """
         Executes a render from a queue
@@ -206,6 +218,7 @@ class MRQRender(BaseRPC):
         :param list shots: Shots to render
         :param str output_dir_override: Movie Pipeline output directory
         :param str filename_format_override: Movie Pipeline filename format override
+        :param tuple frame_range_override: Frame range override from Deadline, see apply_frame_range_override
         """
         unreal.log(f"Executing Queue asset `{queue_path}`")
         unreal.log(f"Rendering shots: {shots}")
@@ -233,7 +246,8 @@ class MRQRender(BaseRPC):
             user=self.proxy.get_job_user(),
             executor_instance=executor,
             output_dir_override=output_dir_override,
-            output_filename_override=filename_format_override
+            output_filename_override=filename_format_override,
+            frame_range_override=frame_range_override
         )
 
     def render_serialized_pipeline(
@@ -251,7 +265,7 @@ class MRQRender(BaseRPC):
         :param list shots: Shots to render
         :param str output_dir_override: Movie Pipeline output directory
         :param str filename_format_override: Movie Pipeline filename format override
-        :param tuple frame_range_override: Frame range override (start, end) from Deadline
+        :param tuple frame_range_override: Frame range override from Deadline, see apply_frame_range_override
         """
         unreal.log(f"Rendering shots: {shots}")
 

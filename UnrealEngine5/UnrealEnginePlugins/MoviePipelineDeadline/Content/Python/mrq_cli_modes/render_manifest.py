@@ -64,7 +64,7 @@ def render_queue_manifest(
     :param executor_instance: Movie Pipeline executor instance
     :param str output_dir_override: Movie Pipeline output directory override
     :param str output_filename_override: Movie Pipeline filename format override
-    :param tuple frame_range_override: Frame range override (start, end) from Deadline
+    :param tuple frame_range_override: (start, end exclusive[, use_output_node]), see apply_frame_range_override
     :return: MRQ Executor
     """
     # The queue subsystem behaves like a singleton so

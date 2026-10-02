@@ -16,6 +16,7 @@ from deadline_job import DeadlineJob
 from deadline_utils import get_deadline_info_from_preset
 
 import p4_utils
+from mrq_cli_modes.utils import get_output_node_range
 
 try:
     import kitsu_utils
@@ -120,8 +121,11 @@ def get_mrg_frame_range(graph, job=None):
     lets us seed Deadline's Frames field (and the original_frame_range metadata)
     with the range the artist actually set on the job.
 
-    :returns: (start, end) if an explicit Custom range is set, otherwise None
-              (the caller then falls back to the sequence's playback range).
+    Graphs without those variables: the custom range of the Global Output node,
+    which is where the worker puts the override for them.
+
+    :returns: (start, end), end exclusive, if an explicit Custom range is set,
+              otherwise None (the caller then falls back to the sequence's playback range).
     """
     if not graph:
         return None
@@ -129,8 +133,12 @@ def get_mrg_frame_range(graph, job=None):
     variables = {v.get_member_name(): v for v in graph.get_variables()}
     start_var, end_var = variables.get("Start"), variables.get("End")
     if not start_var or not end_var:
-        unreal.log_warning(
-            "⚠️ Graph does not expose 'Start'/'End' — "
+        node_range = get_output_node_range(graph)
+        if node_range:
+            unreal.log(f"🎬 Frame range from the graph's Global Output node: {node_range[0]}-{node_range[1]}")
+            return node_range
+        unreal.log(
+            "ℹ️ Graph has no 'Start'/'End' and no custom range on its Global Output node — "
             "falling back to the sequence's playback range."
         )
         return None
@@ -177,6 +185,12 @@ def get_mrg_frame_range(graph, job=None):
     return (start_val, end_val)
 
 def create_shot_list(sequence, shots_to_render, target_size, ignore_chunk_size=False, frame_range_override=None):
+    """
+    :returns: (shots, frame_list, has_frame_range, real_frames). With real_frames the
+              task frames are the sequence's frames, end included (Deadline's
+              convention, MRG's end frame is exclusive). Otherwise they only number
+              the shots and must not be used as a frame range on the worker.
+    """
     # find the shot track in the sequence and derives packing logic. We don't use it for now so everything is in the first if not. We pass one shot per job.
     shots_track = sequence.find_tracks_by_exact_type(unreal.MovieSceneCinematicShotTrack)
 
@@ -190,7 +204,7 @@ def create_shot_list(sequence, shots_to_render, target_size, ignore_chunk_size=F
         frame_count = end_frame - start_frame
 
         shots = {"0": sequence.get_name()}
-        frame_list = [f"{start_frame}-{end_frame}"]
+        frame_list = [f"{start_frame}-{end_frame - 1}"]
 
         unreal.log(
             "\n  shot : " + sequence.get_name() +
@@ -198,7 +212,7 @@ def create_shot_list(sequence, shots_to_render, target_size, ignore_chunk_size=F
             "\n  total frame count " + str(frame_count)
         )
 
-        return shots, frame_list, False
+        return shots, frame_list, False, True
             
     elif len(shots_track) > 1:
         # Multiple shot tracks found - ask if user wants to continue with packing
@@ -317,7 +331,7 @@ def create_shot_list(sequence, shots_to_render, target_size, ignore_chunk_size=F
         # sort in reverse order, to prevent Deadline from merging sequencial frame ranges into a single one
         frame_list = sorted(frame_list, key=lambda x: int(x.split("-")[0]), reverse=True)
 
-        return shots, frame_list, not ignore_chunk_size
+        return shots, frame_list, not ignore_chunk_size, False
 
 #______SUBMISSION LOGIC______#
 
@@ -385,7 +399,7 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
                     "One or more jobs in the queue have an unsaved map/content. "
                     "{packages} "
                     "Please save and check-in all work before submission.".format(
-                        packages="\n".join(dirty_packages)
+                        packages="\n".join(package.get_name() for package in dirty_packages)
                     )
                 )
 
@@ -869,7 +883,7 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
         graph_preset= new_job.get_graph_preset()
         if graph_preset:
             frame_range_override = get_mrg_frame_range(graph_preset, job=new_job)
-        shots, frame_list, has_frame_range = create_shot_list(sequence, shots_to_render, target_size, frame_range_override=frame_range_override)
+        shots, frame_list, has_frame_range, real_frames = create_shot_list(sequence, shots_to_render, target_size, frame_range_override=frame_range_override)
 
         job_info["Frames"] = ",".join(frame_list)
         unreal.log(f'frame list: {job_info["Frames"]}')
@@ -907,6 +921,11 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
         current_index += 1
 
         job_info[f"ExtraInfoKeyValue{current_index}"] = f"original_frame_range={job_info['Frames']}"
+        current_index += 1
+
+        # Tells the worker how to read the task frames (mrq_rpc): "inclusive" = the
+        # sequence's frames, end included; "shots" = shot numbers, no frame override
+        job_info[f"ExtraInfoKeyValue{current_index}"] = f"frame_range_mode={'inclusive' if real_frames else 'shots'}"
         current_index += 1
 
         # --- Temporal Sample Count (Movie Render Graph variable) ---

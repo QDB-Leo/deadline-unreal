@@ -46,6 +46,7 @@ def render_jobs(
     :param str remote_job_preset: Remote render job preset
     :param str output_dir_override: Movie Pipeline output directory override
     :param str output_filename_override: Movie Pipeline filename format override
+    :param tuple frame_range_override: (start, end exclusive[, use_output_node]), see apply_frame_range_override
     :return: MRQ executor
     """
 

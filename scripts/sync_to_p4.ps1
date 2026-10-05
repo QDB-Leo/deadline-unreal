@@ -60,7 +60,9 @@ $ErrorActionPreference = 'Stop'
 # Tracked in git but must never reach production (repo-relative, wildcard).
 $DevOnlyPatterns = @(
     '*/Content/Python/tools/*',
-    '*/Content/Python/unreal_stub_*.py'
+    '*/Content/Python/unreal_stub_*.py',
+    # vanilla AWS file, read by nothing; the production .p4ignore ignores Lib/ folders
+    '*/Content/Python/Lib/requirements.txt'
 )
 $TextExtensions = @('.py', '.ini', '.uplugin', '.cs', '.cpp', '.h', '.json', '.md', '.txt', '.modules')
 $TagPrefix = 'p4-CL'

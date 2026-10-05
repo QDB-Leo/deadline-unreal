@@ -873,19 +873,8 @@ class UnrealEngineCmdManagedProcess(ManagedProcess):
         self.UseProcessTree = True
         self.TerminateOnExit = True
 
-        shell = self._deadline_plugin.GetPluginInfoEntryWithDefault("Shell", "")
-
-        if shell:
-            self._shell = shell
-
         # initialize log handlers
         self._deadline_plugin.initialize_log_handlers(self)
-
-        # Get the current frames for the task
-        current_task_frames = self._deadline_plugin.GetCurrentTask().TaskFrameString
-
-        # Set the frames sting as an environment variable
-        self.SetEnvironmentVariable("CURRENT_RENDER_FRAMES", current_task_frames)
 
     def _handle_stdout_warning(self):
         """

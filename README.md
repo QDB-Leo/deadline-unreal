@@ -60,8 +60,8 @@ To retrieve the local Perforce workspace, we use a pattern to match existing wor
 
 Each value the job carries has one place, set by what reads it:
 
-- **EnvironmentKeyValue**: only what the Unreal process reads itself (`os.environ`), as Deadline makes them its environment variables. `UEMAP_PATH`, `override_output`, `texture_streaming_override`, `MRQ_user_data`.
-- **PluginInfo**: how to launch Unreal, editable in the Monitor's job properties. `Executable`, `ProjectFile`, `CommandLineMode`, `CommandLineArguments`.
+- **EnvironmentKeyValue**: only what the Unreal process must read itself, before it reaches Deadline through the RPC, as Deadline makes them its environment variables. `UEMAP_PATH` (the map the pre-script loads).
+- **PluginInfo**: how to run Unreal, editable in the Monitor's job properties (UnrealEngine5 settings). `Executable`, `ProjectFile`, `CommandLineMode`, `CommandLineArguments`, `OverrideExistingOutput`.
 - **ExtraInfoKeyValue**: everything else, read by `JobPreLoad.py` and the Deadline plugin (or by Unreal through the RPC), and what they write during the render.
   - Set in the job preset: `P4_workspace_prefix` (else the project name), `SyncToSpecificCL`, `SyncSubPath`.
   - Set at submission: `P4_PORT`, `P4_USER`, `P4_CL`, `serialized_pipeline`, `shot_info`, `original_frame_range`, `frame_range_mode`, `frames_remapped`, `output_directory_override`, `filename_format_override`.
@@ -116,7 +116,6 @@ Click on **Render remote** and that's it :)
 - Added a custom pre-script to run at Unreal's opening. Allows to do some process before the render tasks starts.
 - Added the sequence's map path to the job info so the pre-script can open it early, preventing issues with unfinished loading of meshes or textures (that would not even load at later frames or with lots of warmup frames).
 - Fixed applying overrides to the Unreal job configuration (like output directory and filename). Modifying the configuration does not dirty it, and Unreal ignores overrides if it is not dirty.
-- Added override capabilities for texture streaming method and output files override ("Override Existing Output") through environment variables on the job.
 - Prevented processing of disabled Unreal jobs.
 - Fixed a crash when no job preset was assigned.
 - Added Perforce info to the job (Extra Info Key Values, see "Job data").
@@ -125,7 +124,7 @@ Click on **Render remote** and that's it :)
 - Added a check for identical shots within the same sequence.
 - Added a raise when output directory override is not provided, as the default is usually local to the project.
 - Included output directory and filename in the job info, enabling Deadline to provide the associated right-click context options.
-- Forced setting "Override Existing Output" to **True**. This ensures that if a task starts rendering images and then crashes, it will override the existing images upon restarting instead of creating new images with number offsets. (`shot_name.f1001.png(2)`)
+- Added the plugin info entry **OverrideExistingOutput** ("Override Existing Output" in the job's UnrealEngine5 settings, **True** by default). This ensures that if a task starts rendering images and then crashes, it will override the existing images upon restarting instead of creating new images with number offsets. (`shot_name.f1001.png(2)`)
 - Forced command line resolution arguments to match the actual output image resolution. Also added `-ForceRes` to force Unreal to consider this resolution instead of the rendering machine's resolution.
 - Added a method to pack multiple shots into one task based on **ChunkSize** to balance frames-per-task in the job.
 - Added frame ranges to tasks. In case of shot packing, frame ranges will not reflect the actual frame start and end, but will reflect the real frame count.
@@ -134,7 +133,6 @@ Click on **Render remote** and that's it :)
 - Fixed **DefaultJobPreset** to not be saved in the config.
 - Fixed auxilliary files key syntax in the Deadline command for sending jobs.
 - Improved log handling with optionnal regex in plugin infos. Allows to indicate custom regex to parse Unreal logs for progress, warnings and errors. Progress logging can be achieved using a custom executor in Unreal.
-- Unreal's job user_data is now transfered to the farm job. It can be used to store data to be used in certain processes of the render like the Burnin for example.
 
 
 # Further improvements ideas

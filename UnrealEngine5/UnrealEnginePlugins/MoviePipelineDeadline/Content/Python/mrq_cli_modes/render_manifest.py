@@ -48,7 +48,8 @@ def render_queue_manifest(
     executor_instance=None,
     output_dir_override=None,
     output_filename_override=None,
-    frame_range_override=None
+    frame_range_override=None,
+    override_output=None
 ):
     """
     Function to execute a render using a manifest file
@@ -65,6 +66,7 @@ def render_queue_manifest(
     :param str output_dir_override: Movie Pipeline output directory override
     :param str output_filename_override: Movie Pipeline filename format override
     :param tuple frame_range_override: (start, end exclusive[, use_output_node]), see apply_frame_range_override
+    :param bool override_output: Overwrite the existing output files (None: as the job has it)
     :return: MRQ Executor
     """
     # The queue subsystem behaves like a singleton so
@@ -135,7 +137,8 @@ def render_queue_manifest(
             is_cmdline=is_cmdline,
             output_dir_override=output_dir_override,
             output_filename_override=output_filename_override,
-            frame_range_override=frame_range_override
+            frame_range_override=frame_range_override,
+            override_output=override_output
         )
 
     except Exception as err:

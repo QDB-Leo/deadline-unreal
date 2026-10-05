@@ -9,12 +9,7 @@ import unreal
 from deadline_rpc import BaseRPC
 from deadline_progress_executor import DeadlineProgressExecutor, register_proxy
 
-from mrq_cli_modes import (
-    render_queue_manifest,
-    render_current_sequence,
-    render_queue_asset,
-    utils,
-)
+from mrq_cli_modes import render_queue_manifest
 
 
 class MRQRender(BaseRPC):
@@ -32,33 +27,7 @@ class MRQRender(BaseRPC):
 
         # Keep track of the task data
         self._shot_data = None
-        self._queue = None
         self._manifest = None
-        self._sequence_data = None
-
-    def _get_queue(self):
-        """
-        Render a MRQ queue asset
-
-        :return: MRQ queue asset name
-        """
-        if not self._queue:
-            self._queue = self.proxy.get_job_extra_info_key_value("queue_name")
-
-        return self._queue
-
-    def _get_sequence_data(self):
-        """
-        Get sequence data
-
-        :return: Sequence data
-        """
-        if not self._sequence_data:
-            self._sequence_data = self.proxy.get_job_extra_info_key_value(
-                "sequence_render"
-            )
-
-        return self._sequence_data
 
     def _get_serialized_pipeline(self):
         """
@@ -67,11 +36,9 @@ class MRQRender(BaseRPC):
         :return:
         """
         if not self._manifest:
-            serialized_pipeline = os.environ.get("override_serialized_pipeline")
-            if not serialized_pipeline:
-                serialized_pipeline = self.proxy.get_job_extra_info_key_value(
-                    "serialized_pipeline"
-                )
+            serialized_pipeline = self.proxy.get_job_extra_info_key_value(
+                "serialized_pipeline"
+            )
             if not serialized_pipeline:
                 return
 
@@ -142,6 +109,12 @@ class MRQRender(BaseRPC):
             filename_format = self.proxy.check_path_mappings([filename_format])
             filename_format = filename_format[0]
 
+        # Overwrite the frames already on disk (plugin info, true by default): a task
+        # rendered again, or resumed after a GPU crash, replaces its frames instead of
+        # writing beside them (shot.0001.exr(2))
+        override_output = self.proxy.get_plugin_info_entry("OverrideExistingOutput", "true")
+        override_output = str(override_output).strip().lower() in ("true", "1")
+
         # get the shots for the current task
         current_task_data = self._shot_data.get(str(self.current_task_id), None)
 
@@ -178,83 +151,17 @@ class MRQRender(BaseRPC):
             except Exception as err:
                 unreal.log_warning(f"Could not read task frames from Deadline: {err}")
 
-        if self._get_queue():
-            return self.render_queue(
-                self._get_queue(),
-                shots,
-                output_dir_override=output_dir if output_dir else None,
-                filename_format_override=filename_format if filename_format else None,
-                frame_range_override=frame_range_override
-            )
+        if not self._get_serialized_pipeline():
+            self.proxy.fail_render("No serialized_pipeline in the job's extra info: nothing to render")
+            return
 
-        if self._get_serialized_pipeline():
-            return self.render_serialized_pipeline(
-                self._get_serialized_pipeline(),
-                shots,
-                output_dir_override=output_dir if output_dir else None,
-                filename_format_override=filename_format if filename_format else None,
-                frame_range_override=frame_range_override
-            )
-
-        if self._get_sequence_data():
-            render_data = json.loads(self._get_sequence_data())
-            sequence = render_data.get("sequence_name")
-            level = render_data.get("level_name")
-            mrq_preset = render_data.get("mrq_preset_name")
-            return self.render_sequence(
-                sequence,
-                level,
-                mrq_preset,
-                shots,
-                output_dir_override=output_dir if output_dir else None,
-                filename_format_override=filename_format if filename_format else None
-            )
-
-    def render_queue(
-        self,
-        queue_path,
-        shots,
-        output_dir_override=None,
-        filename_format_override=None,
-        frame_range_override=None
-    ):
-        """
-        Executes a render from a queue
-
-        :param str queue_path: Name/path of the queue asset
-        :param list shots: Shots to render
-        :param str output_dir_override: Movie Pipeline output directory
-        :param str filename_format_override: Movie Pipeline filename format override
-        :param tuple frame_range_override: Frame range override from Deadline, see apply_frame_range_override
-        """
-        unreal.log(f"Executing Queue asset `{queue_path}`")
-        unreal.log(f"Rendering shots: {shots}")
-
-        # Get an executor instance
-        executor = self._get_executor_instance()
-
-        # Set executor callbacks
-
-        # Set shot finished callbacks
-        executor.on_individual_shot_work_finished_delegate.add_callable(
-            self._on_individual_shot_finished_callback
-        )
-
-        # Set executor finished callbacks
-        executor.on_executor_finished_delegate.add_callable(
-            self._on_job_finished
-        )
-        executor.on_executor_errored_delegate.add_callable(self._on_job_failed)
-
-        # Render queue with executor
-        render_queue_asset(
-            queue_path,
-            shots=shots,
-            user=self.proxy.get_job_user(),
-            executor_instance=executor,
-            output_dir_override=output_dir_override,
-            output_filename_override=filename_format_override,
-            frame_range_override=frame_range_override
+        return self.render_serialized_pipeline(
+            self._get_serialized_pipeline(),
+            shots,
+            output_dir_override=output_dir if output_dir else None,
+            filename_format_override=filename_format if filename_format else None,
+            frame_range_override=frame_range_override,
+            override_output=override_output
         )
 
     def render_serialized_pipeline(
@@ -263,7 +170,8 @@ class MRQRender(BaseRPC):
         shots,
         output_dir_override=None,
         filename_format_override=None,
-        frame_range_override=None
+        frame_range_override=None,
+        override_output=None
     ):
         """
         Executes a render using a manifest file
@@ -273,6 +181,7 @@ class MRQRender(BaseRPC):
         :param str output_dir_override: Movie Pipeline output directory
         :param str filename_format_override: Movie Pipeline filename format override
         :param tuple frame_range_override: Frame range override from Deadline, see apply_frame_range_override
+        :param bool override_output: Overwrite the existing output files
         """
         unreal.log(f"Rendering shots: {shots}")
 
@@ -299,59 +208,8 @@ class MRQRender(BaseRPC):
             executor_instance=executor,
             output_dir_override=output_dir_override,
             output_filename_override=filename_format_override,
-            frame_range_override=frame_range_override
-        )
-
-    def render_sequence(
-        self,
-        sequence,
-        level,
-        mrq_preset,
-        shots,
-        output_dir_override=None,
-        filename_format_override=None
-    ):
-        """
-        Executes a render using a sequence level and map
-
-        :param str sequence: Level Sequence name
-        :param str level: Level
-        :param str mrq_preset: MovieRenderQueue preset
-        :param list shots: Shots to render
-        :param str output_dir_override: Movie Pipeline output directory
-        :param str filename_format_override: Movie Pipeline filename format override
-        """
-        unreal.log(
-            f"Executing sequence `{sequence}` with map `{level}` "
-            f"and mrq preset `{mrq_preset}`"
-        )
-        unreal.log(f"Rendering shots: {shots}")
-
-        # Get an executor instance
-        executor = self._get_executor_instance()
-
-        # Set executor callbacks
-
-        # Set shot finished callbacks
-        executor.on_individual_shot_work_finished_delegate.add_callable(
-            self._on_individual_shot_finished_callback
-        )
-
-        # Set executor finished callbacks
-        executor.on_executor_finished_delegate.add_callable(
-            self._on_job_finished
-        )
-        executor.on_executor_errored_delegate.add_callable(self._on_job_failed)
-
-        render_current_sequence(
-            sequence,
-            level,
-            mrq_preset,
-            shots=shots,
-            user=self.proxy.get_job_user(),
-            executor_instance=executor,
-            output_dir_override=output_dir_override,
-            output_filename_override=filename_format_override
+            frame_range_override=frame_range_override,
+            override_output=override_output
         )
 
     def _get_executor_instance(self):

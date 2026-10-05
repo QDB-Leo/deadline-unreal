@@ -4,7 +4,6 @@
 This script handles processing jobs and shots in the current loaded queue
 """
 import unreal
-import os
 
 from .utils import (
     movie_pipeline_queue,
@@ -35,7 +34,8 @@ def render_jobs(
     remote_job_preset=None,
     output_dir_override=None,
     output_filename_override=None,
-    frame_range_override=None
+    frame_range_override=None,
+    override_output=None
 ):
     """
     This renders the current state of the queue
@@ -48,6 +48,7 @@ def render_jobs(
     :param str output_dir_override: Movie Pipeline output directory override
     :param str output_filename_override: Movie Pipeline filename format override
     :param tuple frame_range_override: (start, end exclusive[, use_output_node]), see apply_frame_range_override
+    :param bool override_output: Overwrite the existing output files (None: as the job has it)
     :return: MRQ executor
     """
 
@@ -58,31 +59,6 @@ def render_jobs(
     # Update the job
     for job in movie_pipeline_queue.get_jobs():
         config = job.get_configuration()
-
-        # Override texture streaming method
-        texture_streaming_override = os.environ.get("texture_streaming_override")
-        if texture_streaming_override:
-            game_setting = config.find_setting_by_class(
-                unreal.MoviePipelineGameOverrideSetting
-            )
-
-            if not game_setting:
-                # Graph jobs have no such setting (their game overrides live in the graph)
-                unreal.log_warning(
-                    f"No Game Override setting on `{job.job_name}`: texture streaming override "
-                    f"`{texture_streaming_override}` not applied."
-                )
-            elif texture_streaming_override == "Disabled":
-                game_setting.texture_streaming = unreal.MoviePipelineTextureStreamingMethod.DISABLED
-            elif texture_streaming_override == "FullyLoad":
-                game_setting.texture_streaming = unreal.MoviePipelineTextureStreamingMethod.FULLY_LOAD
-            elif texture_streaming_override == "None":
-                game_setting.texture_streaming = unreal.MoviePipelineTextureStreamingMethod.NONE
-
-        # get override output
-        override_output = os.environ.get("override_output")
-        if override_output != None:
-            override_output = int(override_output)
 
         # update output settings: a graph job renders from its graph and ignores the
         # job's (legacy) configuration, so its overrides go on the graph's nodes
@@ -117,10 +93,6 @@ def render_jobs(
 
         if frame_range_override:
             apply_frame_range_override(job, *frame_range_override)
-
-        # set job user_data
-        user_data = os.environ.get("MRQ_user_data", "{}")
-        job.user_data = user_data
 
     if is_remote:
         setup_remote_render_jobs(

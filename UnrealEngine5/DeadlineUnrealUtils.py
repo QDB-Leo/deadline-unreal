@@ -25,62 +25,13 @@ def apply_override_output_directory(deadline_plugin, serialized_pipeline, key):
 
 
 def apply_override_output_override(deadline_plugin, serialized_pipeline, key):
-    # get output override
-    override_output = deadline_plugin.GetJob().GetJobEnvironmentKeyValue("override_output")
-    if override_output != None:
-        override_output = int(override_output)
-        default_output_key = key + '.DefaultConfig.DefaultOutputSetting'
-        serialized_pipeline['Exports']\
-            .setdefault(default_output_key, {})\
-                .setdefault('Properties', {})\
-                    ['bOverrideExistingOutput'] = \
-                        {
-                            "__Type": "BoolProperty",
-                            "__Value": override_output
-                        }
-
-
-def apply_override_texture_streaming(deadline_plugin, serialized_pipeline, key):
-    # get texture streaming override
-    texture_streaming_override = deadline_plugin.GetJob().GetJobEnvironmentKeyValue("texture_streaming_override")
-
-    if texture_streaming_override:
-        # assert override is correct
-        # possible values are:
-        # None -> This will not change the texture streaming method / cvars the users has set.
-        # Disabled -> Disable the Texture Streaming system. Requires the highest amount of VRAM, but helps if Fully Load Used Textures still has blurry textures.
-        # FullyLoad -> Fully load used textures instead of progressively streaming them in over multiple frames. Requires less VRAM but can occasionally still results in blurry textures.
-        tex_stream_values = ["None", "Disabled", "FullyLoad"]
-
-        if texture_streaming_override not in tex_stream_values:
-            deadline_plugin.FailRender(
-                "Texture streaming override has an incorrect value. "\
-                f"{texture_streaming_override} not in {tex_stream_values}"
-            )
-
-        # find the MoviePipelineGameOverrideSetting_X
-        override_tex_stream_key = key + '.DefaultConfig.MoviePipelineGameOverrideSetting_'
-        for key_name in serialized_pipeline['Exports'].keys():
-            if key_name.startswith(override_tex_stream_key):
-                override_tex_stream_key = key_name
-                break
-
-        # assert we found the key
-        if override_tex_stream_key not in serialized_pipeline['Exports'].keys():
-            deadline_plugin.FailRender(
-                "Could not find MoviePipelineGameOverrideSetting to override texture streaming."
-            )
-
-        # apply the override
-        serialized_pipeline['Exports']\
-            .setdefault(override_tex_stream_key, {})\
-                .setdefault('Properties', {})\
-                    ['TextureStreaming'] = \
-                        {
-                            "__Type": "EnumProperty",
-                            "__EnumName": "EMoviePipelineTextureStreamingMethod",
-                            "__Value": f"EMoviePipelineTextureStreamingMethod::{texture_streaming_override}"
-                        }
+    # Overwrite the frames already on disk (plugin info, true by default)
+    override_output = deadline_plugin.GetBooleanPluginInfoEntryWithDefault("OverrideExistingOutput", True)
+    default_output_key = key + '.DefaultConfig.DefaultOutputSetting'
+    serialized_pipeline['Exports']        .setdefault(default_output_key, {})            .setdefault('Properties', {})                ['bOverrideExistingOutput'] =                     {
+                        "__Type": "BoolProperty",
+                        "__Value": override_output
+                    }
 
 
 def write_manifest_file(deadline_plugin, project_root):
@@ -154,7 +105,6 @@ def write_manifest_file(deadline_plugin, project_root):
             # apply overrides, if any
             apply_override_output_directory(deadline_plugin, serialized_pipeline, key)
             apply_override_output_override(deadline_plugin, serialized_pipeline, key)
-            apply_override_texture_streaming(deadline_plugin, serialized_pipeline, key)
 
         # is a shot main entry ?
         elif re.fullmatch(r"MoviePipelineQueue_\d+:MoviePipelineDeadlineExecutorJob_\d+\.MoviePipelineExecutorShot_\d+", key):

@@ -105,6 +105,15 @@ class BaseDeadlineRPCJobManager:
         # more feature/task agnostic
         return self._job.GetJobExtraInfoKeyValue(name)
 
+    def get_plugin_info_entry(self, name, default=""):
+        """
+        Returns a plugin info entry of the job (the UnrealEngine5 settings in the
+        Monitor's job properties), or default when the job has none
+        :param name: Plugin info key
+        :param default: Value when the job has no such entry
+        """
+        return self._deadline_plugin.GetPluginInfoEntryWithDefault(name, default)
+
     def fail_render(self, message):
         """
         Fails the current task with a message. Called by Unreal, so on this server

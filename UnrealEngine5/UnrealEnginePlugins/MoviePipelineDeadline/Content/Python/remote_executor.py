@@ -552,7 +552,7 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
                 deadline_job = DeadlineJob(project_job_info, project_plugin_info)
 
                 deadline_job_id = self.submit_job(
-                    job, dict(user_data), deadline_job, command_args, deadline_service
+                    job, deadline_job, command_args, deadline_service
                 )
 
             except Exception as err:
@@ -628,7 +628,7 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
         # type or parameter types.
         return False
 
-    def submit_job(self, job, user_data, deadline_job, command_args, deadline_service):
+    def submit_job(self, job, deadline_job, command_args, deadline_service):
         """
         Submit a new Job to Deadline
         :param job: Queued job to submit
@@ -966,9 +966,6 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
         map_path = unreal.SystemLibrary.conv_soft_obj_path_to_soft_obj_ref(new_job.map).get_path_name()
         add_key_value(job_info, "EnvironmentKeyValue", "UEMAP_PATH", map_path)
 
-        # Force override of output files, to avoid multiple files when task fails and restart
-        add_key_value(job_info, "EnvironmentKeyValue", "override_output", "1")
-
         # P4 server and account the worker syncs with (JobPreLoad), and the CL it syncs
         # to instead of the head when the preset sets SyncToSpecificCL
         add_key_value(job_info, "ExtraInfoKeyValue", "P4_PORT", p4.port)
@@ -977,18 +974,6 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
 
         if not new_job.filename_format_override:
             unreal.log_warning("No filename format override set on job - Deadline Monitor output filename will be empty.")
-
-
-
-        # force field "remote" to True, since we're going to send it on farm
-        user_data["remote"] = True
-
-
-        # remove job_ids entry, we don't need to send this to the farm
-        # it contains previous Deadline job ids sent from this MRQ job
-        user_data.pop("job_ids", None)
-
-        add_key_value(job_info, "EnvironmentKeyValue", "MRQ_user_data", json.dumps(user_data))
 
         command_args.extend(["-nohmd", "-windowed"])
 
@@ -1027,6 +1012,9 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
             {
                 "CommandLineArguments": full_cmd_args,
                 "CommandLineMode": plugin_info.get("CommandLineMode", "false"),
+                # Overwrite the frames already on disk: a task rendered again replaces
+                # its frames instead of writing beside them (shot.0001.exr(2))
+                "OverrideExistingOutput": plugin_info.get("OverrideExistingOutput", "true"),
             }
         )
 

@@ -58,6 +58,16 @@ Required=false
 DisableIfBlank=false
 Default=true
 
+[OverrideExistingOutput]
+Type=boolean
+Label=Override Existing Output
+Category=Project
+Index=3
+Description=Overwrite the frames already on disk: a task rendered again (requeued, resumed after a GPU crash) replaces its frames instead of writing beside them
+Required=false
+DisableIfBlank=false
+Default=true
+
 [ProgressRegex]
 Type=string
 Label=Progress Regular Expression

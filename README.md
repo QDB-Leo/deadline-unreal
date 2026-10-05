@@ -56,6 +56,20 @@ Deadline side, there is also the dependency to Perforce's python API. We added i
 Relative to Perforce, the `JobPreLoad.py` will try to sync the farmer's Perforce repository based on the job's CL.
 To retrieve the local Perforce workspace, we use a pattern to match existing workspaces. You probably will need to adapt this part to your own pattern.
 
+## Job data
+
+Each value the job carries has one place, set by what reads it:
+
+- **EnvironmentKeyValue**: only what the Unreal process reads itself (`os.environ`), as Deadline makes them its environment variables. `UEMAP_PATH`, `override_output`, `texture_streaming_override`, `MRQ_user_data`.
+- **PluginInfo**: how to launch Unreal, editable in the Monitor's job properties. `Executable`, `ProjectFile`, `CommandLineMode`, `CommandLineArguments`.
+- **ExtraInfoKeyValue**: everything else, read by `JobPreLoad.py` and the Deadline plugin (or by Unreal through the RPC), and what they write during the render.
+  - Set in the job preset: `P4_workspace_prefix` (else the project name), `SyncToSpecificCL`, `SyncSubPath`.
+  - Set at submission: `P4_PORT`, `P4_USER`, `P4_CL`, `serialized_pipeline`, `shot_info`, `original_frame_range`, `frame_range_mode`, `frames_remapped`, `output_directory_override`, `filename_format_override`.
+  - Written by the worker: `synced_cl`, `lastframerendered`, `lastframerenderedtime`, `gpu_crash_resume`.
+- **ExtraInfo0-9**: Monitor columns, display only, never read by the code. `ExtraInfo0` is the temporal sample count, `ExtraInfo9` `submitted_cl`: leave them free in the preset.
+
+A key in the wrong place is ignored without any error: a preset that sets `SyncToSpecificCL` or `P4_workspace_prefix` in its environment must move it to its Extra Info Key Values.
+
 
 # Branches and deploying to production
 
@@ -105,7 +119,7 @@ Click on **Render remote** and that's it :)
 - Added override capabilities for texture streaming method and output files override ("Override Existing Output") through environment variables on the job.
 - Prevented processing of disabled Unreal jobs.
 - Fixed a crash when no job preset was assigned.
-- Added custom environment variables for Perforce info.
+- Added Perforce info to the job (Extra Info Key Values, see "Job data").
 - Fixed job's username.
 - Added a raise when **MoviePipelineGameOverrideSetting** is not enabled. It is usually wanted when rendering cinematic quality images.
 - Added a check for identical shots within the same sequence.

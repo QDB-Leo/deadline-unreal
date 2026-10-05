@@ -36,6 +36,31 @@ p4 = p4_utils.get_p4(project_root, logger=_UnrealLogger)
 
 #______HELPERS______#
 
+# Where the job's data goes (README "Job data"): EnvironmentKeyValue only for what the
+# Unreal process reads itself (os.environ), ExtraInfoKeyValue for the rest.
+
+def get_key_values(job_info, prefix):
+    """
+    The job info's numbered <prefix>N "key=value" entries (EnvironmentKeyValue or
+    ExtraInfoKeyValue), as a dict
+    """
+    pairs = {}
+    for key, value in job_info.items():
+        if key.startswith(prefix) and key[len(prefix):].isdigit() and "=" in value:
+            sub_key, sub_value = value.split("=", 1)
+            pairs[sub_key] = sub_value
+    return pairs
+
+
+def add_key_value(job_info, prefix, key, value):
+    """
+    Adds key=value as the job info's next <prefix>N entry, after the highest N: the
+    preset's numbering may have gaps, and counting entries would overwrite one
+    """
+    used = [int(k[len(prefix):]) for k in job_info if k.startswith(prefix) and k[len(prefix):].isdigit()]
+    job_info[f"{prefix}{max(used, default=-1) + 1}"] = f"{key}={value}"
+
+
 def get_mrg_resolution(graph, job=None):
     
     def find_resolution_var(g, job):
@@ -643,19 +668,6 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
         if pre_job_script and not os.path.exists(pre_job_script):
             raise RuntimeError(f"PreJobScript path provided is not a valid path: {pre_job_script}")
 
-        # check for Perforce required field in jobInfo
-        environment_key_values = {}
-        environment_key_indices = {}
-        current_env_index = 0
-
-
-        for key, value in job_info.items():
-            if key.startswith('EnvironmentKeyValue'):
-                sub_key, sub_val = value.split('=', 1)
-                environment_key_values[sub_key] = sub_val
-                environment_key_indices[sub_key] = int(key.replace('EnvironmentKeyValue', ''))
-                current_env_index += 1
-
         # If P4 is enabled, get the latest submitted CL and add it to the job info
         # The project's latest CL, not the server's (other projects submit too)
         p4_cl = p4_utils.get_latest_submitted_cl(
@@ -667,18 +679,11 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
             p4_cl = -1
         job_info["ExtraInfo9"] = f"submitted_cl={p4_cl}"
 
-        # Not Used
-        # p4_stream = environment_key_values.get('P4_stream', 'main') 
-        p4_workspace_prefix = environment_key_values.get('P4_workspace_prefix')
-
-        # if workspace prefix is not provided, use project name
-        if not p4_workspace_prefix:
+        # The preset's workspace prefix, else the project name
+        if not get_key_values(job_info, "ExtraInfoKeyValue").get("P4_workspace_prefix"):
             project_path = unreal.Paths.get_project_file_path()
             p4_workspace_prefix, _ = os.path.splitext(os.path.basename(project_path))
-
-            # add P4_workspace_prefix in job info
-            job_info[f"EnvironmentKeyValue{current_env_index}"] = f"P4_workspace_prefix={p4_workspace_prefix}"
-            current_env_index += 1
+            add_key_value(job_info, "ExtraInfoKeyValue", "P4_workspace_prefix", p4_workspace_prefix)
 
 
         # Update the job info with overrides from the UI
@@ -854,36 +859,18 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
             job_info["TaskTimeoutSeconds"] = "0"
             job_info["EnableFrameTimeouts"] = "0"
 
-        # Get the current index of the ExtraInfoKeyValue pair, we will
-        # increment the index, so we do not stomp other settings
-        extra_info_key_indexs = set()
-        for key in job_info.keys():
-            if key.startswith("ExtraInfoKeyValue"):
-                _, index = key.split("ExtraInfoKeyValue")
-                extra_info_key_indexs.add(int(index))
-
-        # Get the highest number in the index list and increment the number
-        # by one
-        current_index = max(extra_info_key_indexs) + 1 if extra_info_key_indexs else 0
-
         # Put the serialized Queue into the Job data but hidden from
         # Deadline UI
-        job_info[f"ExtraInfoKeyValue{current_index}"] = f"serialized_pipeline={serialized_pipeline}"
-
-        # Increment the index
-        current_index += 1
+        add_key_value(job_info, "ExtraInfoKeyValue", "serialized_pipeline", serialized_pipeline)
 
         # Put the shot info in the job extra info keys
-        job_info[f"ExtraInfoKeyValue{current_index}"] = f"shot_info={json.dumps(shots)}"
-        current_index += 1
+        add_key_value(job_info, "ExtraInfoKeyValue", "shot_info", json.dumps(shots))
 
-        job_info[f"ExtraInfoKeyValue{current_index}"] = f"original_frame_range={job_info['Frames']}"
-        current_index += 1
+        add_key_value(job_info, "ExtraInfoKeyValue", "original_frame_range", job_info['Frames'])
 
         # Tells the worker how to read the task frames (mrq_rpc): "inclusive" = the
         # sequence's frames, end included; "shots" = shot numbers, no frame override
-        job_info[f"ExtraInfoKeyValue{current_index}"] = f"frame_range_mode={'inclusive' if real_frames else 'shots'}"
-        current_index += 1
+        add_key_value(job_info, "ExtraInfoKeyValue", "frame_range_mode", 'inclusive' if real_frames else 'shots')
 
         # Play Rate (time dilation) and Time Warp tracks: the output frames no longer match
         # the sequence's, so the worker can't resume a task after a GPU crash from the
@@ -894,8 +881,7 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
         )
         if frames_remapped:
             unreal.log_warning("Play Rate / Time Warp track in the sequence: no resume after a GPU crash")
-        job_info[f"ExtraInfoKeyValue{current_index}"] = f"frames_remapped={int(frames_remapped)}"
-        current_index += 1
+        add_key_value(job_info, "ExtraInfoKeyValue", "frames_remapped", int(frames_remapped))
 
         # --- Temporal Sample Count (Movie Render Graph variable) ---
         # Reads "TemporalSampleCount" int variable from the graph preset if it exists,
@@ -958,17 +944,14 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
 
         # Set the job output directory override on the deadline job
         if new_job.output_directory_override.path:
-            job_info[f"ExtraInfoKeyValue{current_index}"] = f"output_directory_override={new_job.output_directory_override.path}"
-            current_index += 1
+            add_key_value(job_info, "ExtraInfoKeyValue", "output_directory_override", new_job.output_directory_override.path)
         else:
-            job_info[f"ExtraInfoKeyValue{current_index}"] = f"output_directory_override={output_dir}"
-            current_index += 1
+            add_key_value(job_info, "ExtraInfoKeyValue", "output_directory_override", output_dir)
 
 
         # Set the job filename format override on the deadline job
         if new_job.filename_format_override:
-            job_info[f"ExtraInfoKeyValue{current_index}"] = f"filename_format_override={new_job.filename_format_override}"
-            current_index += 1
+            add_key_value(job_info, "ExtraInfoKeyValue", "filename_format_override", new_job.filename_format_override)
 
 
 
@@ -981,21 +964,16 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
 
         # add map path to job environment, to be used to preload it
         map_path = unreal.SystemLibrary.conv_soft_obj_path_to_soft_obj_ref(new_job.map).get_path_name()
-        job_info[f"EnvironmentKeyValue{current_env_index}"] = f"UEMAP_PATH={map_path}"
-        current_env_index += 1
+        add_key_value(job_info, "EnvironmentKeyValue", "UEMAP_PATH", map_path)
 
         # Force override of output files, to avoid multiple files when task fails and restart
-        job_info[f"EnvironmentKeyValue{current_env_index}"] = f"override_output=1"
-        current_env_index += 1
+        add_key_value(job_info, "EnvironmentKeyValue", "override_output", "1")
 
-        # finalize user_data to pass it to the Deadline job
-        job_info[f"EnvironmentKeyValue{current_env_index}"] = f"P4_PORT={p4.port}"
-        current_env_index += 1
-        job_info[f"EnvironmentKeyValue{current_env_index}"] = f"P4_USER={p4.user}"
-        current_env_index += 1
-        #Override here to speify the CL to sync to, instead of head (if sync_to_specific_cl is set)
-        job_info[f"EnvironmentKeyValue{current_env_index}"] = f"P4_CL={p4_cl}"
-        current_env_index += 1
+        # P4 server and account the worker syncs with (JobPreLoad), and the CL it syncs
+        # to instead of the head when the preset sets SyncToSpecificCL
+        add_key_value(job_info, "ExtraInfoKeyValue", "P4_PORT", p4.port)
+        add_key_value(job_info, "ExtraInfoKeyValue", "P4_USER", p4.user)
+        add_key_value(job_info, "ExtraInfoKeyValue", "P4_CL", p4_cl)
 
         if not new_job.filename_format_override:
             unreal.log_warning("No filename format override set on job - Deadline Monitor output filename will be empty.")
@@ -1010,8 +988,7 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
         # it contains previous Deadline job ids sent from this MRQ job
         user_data.pop("job_ids", None)
 
-        job_info[f"EnvironmentKeyValue{current_env_index}"] = f"MRQ_user_data={json.dumps(user_data)}"
-        current_env_index += 1
+        add_key_value(job_info, "EnvironmentKeyValue", "MRQ_user_data", json.dumps(user_data))
 
         command_args.extend(["-nohmd", "-windowed"])
 

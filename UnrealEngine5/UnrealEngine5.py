@@ -101,11 +101,10 @@ class UnrealEnginePlugin(DeadlinePlugin):
         self.PluginType = PluginType.Advanced
 
         # determine if the job should be run in commandline or not
-        # can be overriden with environment variable OverrideCommandLineMode
-        # as plugin info cannot be easily modified on Deadline
-        self._commandline_mode = self.GetPluginInfoEntryWithDefault("CommandLineMode", "true")
-        self._commandline_mode = self.GetJob().GetJobEnvironmentKeyValue("OverrideCommandLineMode") or self._commandline_mode
-        self._commandline_mode = StringUtils.ParseBoolean(self._commandline_mode)
+        # (plugin info, editable in the Monitor's job properties)
+        self._commandline_mode = StringUtils.ParseBoolean(
+            self.GetPluginInfoEntryWithDefault("CommandLineMode", "true")
+        )
 
         self.LogInfo("Initialization complete!")
 

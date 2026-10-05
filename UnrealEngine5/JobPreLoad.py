@@ -24,8 +24,8 @@ def __main__(deadline_plugin):
 
     # initialize P4
     p4 = P4()
-    p4.port = job.GetJobEnvironmentKeyValue("P4_PORT")
-    p4.user = job.GetJobEnvironmentKeyValue("P4_USER")
+    p4.port = job.GetJobExtraInfoKeyValue("P4_PORT")
+    p4.user = job.GetJobExtraInfoKeyValue("P4_USER")
 
     # Ticket-based auth only - no hardcoded password.
     # The farm account must be logged in once, outside of this code:
@@ -48,7 +48,7 @@ def __main__(deadline_plugin):
             return
 
         # get project prefix
-        workspace_prefix = job.GetJobEnvironmentKeyValue("P4_workspace_prefix")
+        workspace_prefix = job.GetJobExtraInfoKeyValue("P4_workspace_prefix")
 
         if not workspace_prefix:
             deadline_plugin.FailRender(
@@ -98,11 +98,11 @@ def __main__(deadline_plugin):
         local_cl = local_cl_dict[0]['change'] if local_cl_dict else None
         deadline_plugin.LogInfo(f"Local CL is {local_cl}")
 
-        sync_to_specific_cl = (job.GetJobEnvironmentKeyValue("SyncToSpecificCL") or "").lower() in ("true", "1", "yes", "t", "y") #environmentkeyvalue, per-job override
+        sync_to_specific_cl = (job.GetJobExtraInfoKeyValue("SyncToSpecificCL") or "").lower() in ("true", "1", "yes", "t", "y") # ExtraInfoKeyValue, set in the preset
         if sync_to_specific_cl:
-            wanted_cl = job.GetJobEnvironmentKeyValue("P4_CL")
+            wanted_cl = job.GetJobExtraInfoKeyValue("P4_CL")
             if not wanted_cl:
-                deadline_plugin.FailRender("SyncToSpecificCL is true but no wanted CL provided in job's P4_CL environment variable.")
+                deadline_plugin.FailRender("SyncToSpecificCL is true but no wanted CL provided in job's P4_CL extra info key.")
                 return
             sync_target = wanted_cl
         else:

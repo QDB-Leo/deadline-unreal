@@ -1011,7 +1011,6 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
         plugin_info.update(
             {
                 "CommandLineArguments": full_cmd_args,
-                "CommandLineMode": plugin_info.get("CommandLineMode", "false"),
                 # Overwrite the frames already on disk: a task rendered again replaces
                 # its frames instead of writing beside them (shot.0001.exr(2))
                 "OverrideExistingOutput": plugin_info.get("OverrideExistingOutput", "true"),

@@ -10,9 +10,8 @@ from pathlib import Path
 
 from Deadline.Plugins import DeadlinePlugin, PluginType
 from FranticX.Processes import ManagedProcess
-from Deadline.Scripting import RepositoryUtils, FileUtils, StringUtils
+from Deadline.Scripting import RepositoryUtils, FileUtils
 
-import DeadlineUnrealUtils
 from DeadlineRPC import (
     DeadlineRPCServerManager,
     DeadlineRPCServerThread,
@@ -71,11 +70,6 @@ class UnrealEnginePlugin(DeadlinePlugin):
         # Keep track of when Job Ended has been called
         self._job_ended = False
 
-        # set the plugin to commandline mode by default. This will launch the
-        # editor and wait for the process to exit. There is no communication
-        # with the deadline process.
-        self._commandline_mode = True
-
     def clean_up(self):
         """
         Plugin cleanup
@@ -100,23 +94,12 @@ class UnrealEnginePlugin(DeadlinePlugin):
         self.StdoutHandling = True
         self.PluginType = PluginType.Advanced
 
-        # determine if the job should be run in commandline or not
-        # (plugin info, editable in the Monitor's job properties)
-        self._commandline_mode = StringUtils.ParseBoolean(
-            self.GetPluginInfoEntryWithDefault("CommandLineMode", "true")
-        )
-
         self.LogInfo("Initialization complete!")
 
     def _on_start_job(self):
         """
         This is executed when the plugin picks up a job
         """
-
-        # Skip if we are in commandline mode
-        if self._commandline_mode:
-            return
-
         self.LogInfo("Executing Start Job - Setup RPC Manager")
 
         # Get and set up the RPC manager for the plugin
@@ -158,91 +141,67 @@ class UnrealEnginePlugin(DeadlinePlugin):
         """
         Execute the render task
         """
-        # This starts a self-managed process that terminates based on the exit
-        # code of the process. 0 means success
-        if self._commandline_mode:
-            startup_dir = self._get_startup_directory()
+        # Flush stdout. This is useful after executing the first task
+        self.FlushMonitoredManagedProcessStdout(self._unreal_process_name)
 
-            self.unreal_managed_process = UnrealEngineCmdManagedProcess(
-                self, self._unreal_process_name, startup_dir=startup_dir
+        # Start next tasks
+        self.LogWarning(f"Starting Task {self.GetCurrentTaskId()}")
+
+        # Account for any re-queued jobs. Deadline will immediately execute
+        # render tasks if a job has been re-queued on the same process. If
+        # that happens get a new instance of the rpc manager
+        if not self._deadline_rpc_manager or self._job_ended:
+            self._deadline_rpc_manager = self._setup_rpc_manager()
+
+        if not self._deadline_rpc_manager.is_started:
+
+            # Start the manager
+            self._deadline_rpc_manager.start(threaded=True)
+
+            # Get the socket the server is using and expose it to the
+            # process
+            server = self._deadline_rpc_manager.get_server()
+
+            _, server_port = server.socket.getsockname()
+
+            self.LogWarning(
+                f"Starting Deadline RPC Manager on port `{server_port}`"
             )
 
-            # Auto execute the managed process
-            self.RunManagedProcess(self.unreal_managed_process)
-            exit_code = self.unreal_managed_process.ExitCode  # type: ignore
+            # Get the port the server socket is going to use and
+            # allow other systems to get the port to the rpc server from the
+            # process environment variables
+            self.SetProcessEnvironmentVariable(
+                "DEADLINE_RPC_PORT", str(server_port)
+            )
 
-            self.LogInfo(f"Process returned: {exit_code}")
+        # Fail if we don't have an instance to a managed process.
+        # This should typically return true
+        if not self.unreal_managed_process:
+            self.FailRender("There is no unreal process Running")
 
-            if exit_code != 0:
-                self.FailRender(
-                    f"Process returned non-zero exit code '{exit_code}'"
-                )
+        if not self.MonitoredManagedProcessIsRunning(self._unreal_process_name):
+            # Start the monitored Process
+            self.StartMonitoredManagedProcess(
+                self._unreal_process_name,
+                self.unreal_managed_process
+            )
 
-        else:
-            # Flush stdout. This is useful after executing the first task
-            self.FlushMonitoredManagedProcessStdout(self._unreal_process_name)
+            self.VerifyMonitoredManagedProcess(self._unreal_process_name)
 
-            # Start next tasks
-            self.LogWarning(f"Starting Task {self.GetCurrentTaskId()}")
+        # Execute the render task
+        self.unreal_managed_process.render_task()
 
-            # Account for any re-queued jobs. Deadline will immediately execute
-            # render tasks if a job has been re-queued on the same process. If
-            # that happens get a new instance of the rpc manager
-            if not self._deadline_rpc_manager or self._job_ended:
-                self._deadline_rpc_manager = self._setup_rpc_manager()
+        # Done: a later requeue of this task starts from its first frame again
+        self.clear_gpu_crash_resume()
 
-            if not self._deadline_rpc_manager.is_started:
-
-                # Start the manager
-                self._deadline_rpc_manager.start(threaded=True)
-
-                # Get the socket the server is using and expose it to the
-                # process
-                server = self._deadline_rpc_manager.get_server()
-
-                _, server_port = server.socket.getsockname()
-
-                self.LogWarning(
-                    f"Starting Deadline RPC Manager on port `{server_port}`"
-                )
-
-                # Get the port the server socket is going to use and
-                # allow other systems to get the port to the rpc server from the
-                # process environment variables
-                self.SetProcessEnvironmentVariable(
-                    "DEADLINE_RPC_PORT", str(server_port)
-                )
-
-            # Fail if we don't have an instance to a managed process.
-            # This should typically return true
-            if not self.unreal_managed_process:
-                self.FailRender("There is no unreal process Running")
-
-            if not self.MonitoredManagedProcessIsRunning(self._unreal_process_name):
-                # Start the monitored Process
-                self.StartMonitoredManagedProcess(
-                    self._unreal_process_name,
-                    self.unreal_managed_process
-                )
-
-                self.VerifyMonitoredManagedProcess(self._unreal_process_name)
-
-            # Execute the render task
-            self.unreal_managed_process.render_task()
-
-            # Done: a later requeue of this task starts from its first frame again
-            self.clear_gpu_crash_resume()
-
-            self.LogWarning(f"Finished Task {self.GetCurrentTaskId()}")
-            self.FlushMonitoredManagedProcessStdout(self._unreal_process_name)
+        self.LogWarning(f"Finished Task {self.GetCurrentTaskId()}")
+        self.FlushMonitoredManagedProcessStdout(self._unreal_process_name)
 
     def _on_end_job(self):
         """
         Called when the job ends
         """
-        if self._commandline_mode:
-            return
-
         self.FlushMonitoredManagedProcessStdout(self._unreal_process_name)
         self.LogWarning("EndJob called")
         self.ShutdownMonitoredManagedProcess(self._unreal_process_name)
@@ -260,28 +219,8 @@ class UnrealEnginePlugin(DeadlinePlugin):
     def _on_process_exit(self):
         # If the process ends unexpectedly, make sure we shut down the manager
         # gracefully
-        if self._commandline_mode:
-            return
-
         if self._deadline_rpc_manager:
             self._deadline_rpc_manager.shutdown()
-
-    def _get_startup_directory(self):
-        """
-        Get startup directory
-        """
-        startup_dir = self.GetPluginInfoEntryWithDefault(
-            "StartupDirectory", ""
-        ).strip()
-        # Get the project root path
-        project_root = self.GetProcessEnvironmentVariable("ProjectRoot")
-
-        if startup_dir:
-            if project_root:
-                startup_dir = startup_dir.format(ProjectRoot=project_root)
-
-            self.LogInfo("Startup Directory: {dir}".format(dir=startup_dir))
-            return startup_dir.replace("\\", "/")
 
     def initialize_log_handlers(self, process):
         """
@@ -813,155 +752,3 @@ class UnrealEngineManagedProcess(ManagedProcess):
         self._deadline_plugin.LogInfo(f"Startup Arguments: `{arguments}`")
 
         return arguments
-
-
-class UnrealEngineCmdManagedProcess(ManagedProcess):
-    """
-    Process for executing unreal over commandline
-    """
-
-    def __init__(self, deadline_plugin, process_name, startup_dir=""):
-        """
-        Constructor
-        :param process_name: The name of this process
-        """
-        if sys.version_info.major == 3:
-            super().__init__()
-        self._deadline_plugin = deadline_plugin
-        self._name = process_name
-        self.ExitCode = -1
-        self._startup_dir = startup_dir
-        self._executable_path = None
-
-        self.InitializeProcessCallback += self._initialize_process
-        self.RenderExecutableCallback += self._render_executable
-        self.RenderArgumentCallback += self._render_argument
-        self.CheckExitCodeCallback += self._check_exit_code
-        self.StartupDirectoryCallback += self._startup_directory
-
-    def clean_up(self):
-        """
-        Called when the plugin cleanup is called
-        """
-        self._deadline_plugin.LogInfo("Executing managed process cleanup.")
-        # Clean up stdout handler callbacks.
-        for stdoutHandler in self.StdoutHandlers:
-            del stdoutHandler.HandleCallback
-
-        del self.InitializeProcessCallback
-        del self.RenderExecutableCallback
-        del self.RenderArgumentCallback
-        del self.CheckExitCodeCallback
-        del self.StartupDirectoryCallback
-        self._deadline_plugin.LogInfo("Managed Process Cleanup Finished.")
-
-    def _initialize_process(self):
-        """
-        Called by Deadline to initialize the process.
-        """
-        self._deadline_plugin.LogInfo(
-            "Executing managed process Initialize Process."
-        )
-
-        # Set the ManagedProcess specific settings.
-        self.PopupHandling = True
-        self.StdoutHandling = True
-        self.HideDosWindow = True
-
-        # Ensure child processes are killed and the parent process is
-        # terminated on exit
-        self.UseProcessTree = True
-        self.TerminateOnExit = True
-
-        # initialize log handlers
-        self._deadline_plugin.initialize_log_handlers(self)
-
-    def _handle_stdout_warning(self):
-        """
-        Callback for when a line of stdout contains a WARNING message.
-        """
-        self._deadline_plugin.LogWarning(self.GetRegexMatch(0))
-
-    def _handle_stdout_error(self):
-        """
-        Callback for when a line of stdout contains an ERROR message.
-        """
-        self._deadline_plugin.FailRender(self.GetRegexMatch(0))
-
-    def _handle_progress(self):
-        """
-        Handles any progress reports
-        """
-        self._deadline_plugin.generic_handle_progress(self)
-
-    def _check_exit_code(self, exit_code):
-        """
-        Returns the process exit code
-        :param exit_code:
-        :return:
-        """
-        self.ExitCode = exit_code
-
-    def _startup_directory(self):
-        """
-        Startup directory
-        """
-        return self._startup_dir
-
-    def _render_executable(self):
-        """
-        Get the render executable
-        """
-        self._deadline_plugin.LogInfo("Setting up Render Executable")
-        self._executable_path = resolve_executable(self._deadline_plugin)
-        return self._executable_path
-
-    def _render_argument(self):
-        """
-        Get the arguments to startup unreal
-        :return:
-        """
-        self._deadline_plugin.LogInfo("Setting up Render Arguments")
-
-        project_file = resolve_uproject(self._deadline_plugin, self._executable_path)
-
-        # Get the render arguments
-        args = RepositoryUtils.CheckPathMapping(
-            self._deadline_plugin.GetPluginInfoEntry(
-                "CommandLineArguments"
-            ).strip()
-        )
-
-        args = args.replace("\u201c", '"').replace("\u201d", '"')
-
-        # remove UI args that are added by default to be able
-        # to switch from commandline to UI mode directly on the job
-        args = args.replace("py mrq_rpc.py", "")
-
-        # write manifest file based on job infos
-        manifest_filepath = DeadlineUnrealUtils.write_manifest_file(
-            self._deadline_plugin,
-            project_root=os.path.dirname(project_file)
-        )
-
-        startup_args = " ".join(
-            [
-                '"{u_project}"'.format(u_project=project_file.as_posix()),
-                args,
-                "-log",
-                "-unattended",
-                "-stdout",
-                "-allowstdoutlogverbosity",
-                "-renderoffscreen",
-                "-game",
-                "-messaging",
-                "-Multiprocess",
-                f'-MoviePipelineConfig="{manifest_filepath}"', # important to use double quotes for manifest path
-            ]
-        )
-
-        self._deadline_plugin.LogInfo(
-            "Render Arguments: {args}".format(args=startup_args)
-        )
-
-        return startup_args

@@ -10,23 +10,12 @@ DisableIfBlank=false
 
 [LoggingDirectory]
 Type=string
-Label=Command Line Arguments
+Label=Logging Directory
 Category=Executable
 Index=2
-Description=What command line arguments should be passed to the executable?
+Description=Folder where Unreal writes its log, under <job name>/<submit date> (leave blank for Unreal's default)
 Required=false
 DisableIfBlank=false
-
-[StartupDirectory]
-Type=string
-Label=Startup Directory
-Category=Command Line Options
-CategoryOrder=0
-Index=3
-Description=The directory to start the command line in (leave blank to use default)
-Required=false
-Default=
-DisableIfBlank=true
 
 [ProjectFile]
 Type=String
@@ -48,21 +37,11 @@ Required=false
 Default=
 DisableIfBlank=false
 
-[CommandLineMode]
-Type=boolean
-Label=Command Line Mode
-Category=Project
-Index=2
-Description=Should the Editor process commands as commandline arguments
-Required=false
-DisableIfBlank=false
-Default=true
-
 [OverrideExistingOutput]
 Type=boolean
 Label=Override Existing Output
 Category=Project
-Index=3
+Index=2
 Description=Overwrite the frames already on disk: a task rendered again (requeued, resumed after a GPU crash) replaces its frames instead of writing beside them
 Required=false
 DisableIfBlank=false

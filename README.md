@@ -36,10 +36,7 @@ You can also define a default **Deadline job preset** in the project settings, i
 This asset defines default values for most of the Deadline job options, and allows to choose what options can or cannot be overriden by the user from the MRQ (though we had issues making Unreal correctly do that and ended up modifying the default shown properties in the c++ directly..).
 There is an example of such asset in the repository: **DJP_DeadlineJobPresetExample_EditorMode.uasset**.
 
-There are 2 types of Deadline Unreal jobs defined by the boolean option `CommandLineMode`:
-- When **True**, the task will launch Unreal in game mode and will render whatever the manifest file in the arguments tells it to do. There is no back-and-forth communication possible between Deadline and Unreal.
-This mode doesn't launch the **editor** part of Unreal, this means blueprint nodes that are **editor** will not be working.
-- When **False**, the task will launch Unreal in editor mode (exactly like with the UI) and start an RPC server(**Deadline**)/client(**Unreal**) which allows communication. Unreal will ask Deadline what it should render. This allows to keep Unreal open between tasks of the same job. In editor mode, all blueprint editor nodes will correctly work. You can add the `-renderoffscreen` argument (in **CommandLineArguments**) to allow running this job on a farm as a service with no UI.
+Each task runs in Unreal's editor (exactly like with the UI): the Deadline plugin starts an RPC server, Unreal a client, and Unreal asks Deadline what it should render. Unreal stays open between tasks of the same job, and Python and the editor blueprint nodes work (the Kitsu callbacks of the graphs need them). You can add the `-renderoffscreen` argument (in **CommandLineArguments**) to allow running this job on a farm as a service with no UI.
 
 There is a dependancy on Perforce's python API. When sending a job to Deadline, the user needs to specify the Perforce's changelist id (CL) that the worker should sync to in order to do the render with the correct version of the project. This CL is then checked against Perforce to ensure its validity, and propose the user to use the last valid one if the provided CL is not valid.
 
@@ -61,7 +58,7 @@ To retrieve the local Perforce workspace, we use a pattern to match existing wor
 Each value the job carries has one place, set by what reads it:
 
 - **EnvironmentKeyValue**: only what the Unreal process must read itself, before it reaches Deadline through the RPC, as Deadline makes them its environment variables. `UEMAP_PATH` (the map the pre-script loads).
-- **PluginInfo**: how to run Unreal, editable in the Monitor's job properties (UnrealEngine5 settings). `Executable`, `ProjectFile`, `CommandLineMode`, `CommandLineArguments`, `OverrideExistingOutput`.
+- **PluginInfo**: how to run Unreal, editable in the Monitor's job properties (UnrealEngine5 settings). `Executable`, `ProjectFile`, `CommandLineArguments`, `OverrideExistingOutput`.
 - **ExtraInfoKeyValue**: everything else, read by `JobPreLoad.py` and the Deadline plugin (or by Unreal through the RPC), and what they write during the render.
   - Set in the job preset: `P4_workspace_prefix` (else the project name), `SyncToSpecificCL`, `SyncSubPath`.
   - Set at submission: `P4_PORT`, `P4_USER`, `P4_CL`, `serialized_pipeline`, `shot_info`, `original_frame_range`, `frame_range_mode`, `frames_remapped`, `output_directory_override`, `filename_format_override`.
@@ -109,9 +106,8 @@ Click on **Render remote** and that's it :)
 
 # List of changes
 
-- Completed the implementation of **UnrealEngineCmdManagedProcess** (command line mode for rendering), mainly writing the manifest file to the local project and adding it to the command line.
 - Forced command line argument `-renderoffscreen`, as typical renderfarm worker do not have the UI setup and live render preview is unnecessary.
-- Corrected plugin info entry **CommandLineMode**, to allow choosing the opening/render mode for Unreal jobs (command line or editor).
+- Removed the command line mode (`CommandLineMode`, Unreal in `-game` with a manifest file) and its **Submit Movie Render Queue Asset** menu: it had no Python (no Kitsu callbacks, no map preload), applied no graph override, frame range or GPU crash resume, and reported failures through the exit code only. Every job renders in the editor.
 - Added a **JobPreLoad** that will sync the local Perforce repository based on the CL provided for the job.
 - Added a custom pre-script to run at Unreal's opening. Allows to do some process before the render tasks starts.
 - Added the sequence's map path to the job info so the pre-script can open it early, preventing issues with unfinished loading of meshes or textures (that would not even load at later frames or with lots of warmup frames).

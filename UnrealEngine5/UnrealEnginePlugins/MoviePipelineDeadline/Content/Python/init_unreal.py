@@ -1,9 +1,5 @@
 # Copyright Epic Games, Inc. All Rights Reserved
 
-# Built-in
-import sys
-from pathlib import Path
-
 # Third-party
 import unreal
 
@@ -12,17 +8,6 @@ import mrq_cli
 
 plugin_name = "MoviePipelineDeadline"
 
-
-# Add the actions path to sys path
-actions_path = Path(__file__).parent.joinpath("pipeline_actions").as_posix().lower()
-
-if actions_path not in sys.path:
-    sys.path.append(actions_path)
-
-from pipeline_actions import render_queue_action
-
-# Register the menu from the render queue actions
-render_queue_action.register_menu_action()
 
 # The asset registry may not be fully loaded by the time this is called,
 # warn the user that attempts to look assets up may fail

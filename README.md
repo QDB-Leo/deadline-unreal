@@ -2,7 +2,7 @@
 Deadline and Unreal plugins to send Unreal render jobs to Deadline.
 
 Improved version of the DwarfLabs code.
-This is still a WIP but helps me a lot. I'm using it with UE 5.6 and 5.7
+This is still a WIP but helps me a lot. I'm using it with UE 5.7
 
 Major changes from DwarfLabs version :
 - Supports MRG, retrieves correct resolution from either job override, node value or subgraph
@@ -14,10 +14,14 @@ Major changes from DwarfLabs version :
 - GPU crash detection (editor mode): on a D3D/DXGI crash line in Unreal's log, the task fails and Deadline requeues it, and the next attempt resumes from the last frame the task wrote (rendered again, its write may be cut). The job shows it as `lastframerendered`. Sequences with a Play Rate or Time Warp track (`frames_remapped=1`) and shot tasks don't resume: their task is failed for good.
 - A render that doesn't succeed fails its task: a canceled or errored render, an error reported by Unreal, Unreal exiting mid task. Tasks have a timeout per frame: the job preset's Task Timeout Seconds, 300 s when it is 0 (enough for a 4K path traced frame), times the task's frames.
 - Output overrides of the job (directory, filename format, overwrite existing output) apply to graph jobs too: the worker sets them on the graph's Global Output and file output nodes.
+  The output folder shown in the Monitor is resolved by MRG at submission, as the render will (`{sequence_name}`, `{shot_name}`, `{date}`..., from the job, its first shot and the graph with the job's variables; `{version}` is left to the render).
+- The job's `.uproject` is sent as a path in the P4 workspace (`{ProjectRoot}/...`), which each render node resolves to its own workspace root: render nodes don't need the submitter's drive and folders.
 - Before submitting, the project's files opened in Perforce but not submitted are listed: the farm renders the depot, without them. The job notes the project's latest submitted CL (`submitted_cl`) and the CL the worker actually rendered (`synced_cl`).
 
 Todo :
 - GPU crash resume for sequences with a Play Rate / Time Warp track: map the output frames back to the sequence's
+- `get_mrg_resolution` takes the first struct variable whose value holds `Resolution=`, whatever its name: look for the variable wired to the output resolution, or by name
+- `scripts/sync_to_p4.ps1`: no production path as `-Target` default in this public repository; take `-Target` or a per machine environment variable, as kitsu-unreal's `P4_PLUGINS_TARGET`
 
 
 Binaries for Unreal Plugins are provided as they can't be automatically generated as usual
@@ -61,7 +65,7 @@ Each value the job carries has one place, set by what reads it:
 - **PluginInfo**: how to run Unreal, editable in the Monitor's job properties (UnrealEngine5 settings). `Executable`, `ProjectFile`, `CommandLineArguments`, `OverrideExistingOutput`.
 - **ExtraInfoKeyValue**: everything else, read by `JobPreLoad.py` and the Deadline plugin (or by Unreal through the RPC), and what they write during the render.
   - Set in the job preset: `P4_workspace_prefix` (else the project name), `SyncToSpecificCL`, `SyncSubPath`.
-  - Set at submission: `P4_PORT`, `P4_USER`, `P4_CL`, `serialized_pipeline`, `shot_info`, `original_frame_range`, `frame_range_mode`, `frames_remapped`, `output_directory_override`, `filename_format_override`.
+  - Set at submission: `P4_PORT`, `P4_USER`, `P4_CL`, `serialized_pipeline`, `shot_info`, `original_frame_range`, `frame_range_mode`, `frames_remapped`, `output_directory` (resolved, where the worker looks for frames), and the job's own overrides only: `output_directory_override`, `filename_format_override`.
   - Written by the worker: `synced_cl`, `lastframerendered`, `lastframerenderedtime`, `gpu_crash_resume`.
 - **ExtraInfo0-9**: Monitor columns, display only, never read by the code. `ExtraInfo0` is the temporal sample count, `ExtraInfo9` `submitted_cl`: leave them free in the preset.
 
@@ -118,7 +122,6 @@ Click on **Render remote** and that's it :)
 - Fixed job's username.
 - Added a raise when **MoviePipelineGameOverrideSetting** is not enabled. It is usually wanted when rendering cinematic quality images.
 - Added a check for identical shots within the same sequence.
-- Added a raise when output directory override is not provided, as the default is usually local to the project.
 - Included output directory and filename in the job info, enabling Deadline to provide the associated right-click context options.
 - Added the plugin info entry **OverrideExistingOutput** ("Override Existing Output" in the job's UnrealEngine5 settings, **True** by default). This ensures that if a task starts rendering images and then crashes, it will override the existing images upon restarting instead of creating new images with number offsets. (`shot_name.f1001.png(2)`)
 - Forced command line resolution arguments to match the actual output image resolution. Also added `-ForceRes` to force Unreal to consider this resolution instead of the rendering machine's resolution.
@@ -136,8 +139,6 @@ Click on **Render remote** and that's it :)
 - Add support for Perforce streams. Current implementation is not ideal because changes needed for a render have to be pushed on the main branch, making them the new default for every users while sender may just want to "test" stuff without officially pushing that to the others.
 
 - Add an option to write images local to the farmer, then copy to final destination on task end.
-
-- Implement an override to overwrite output frame range.
 
 - Run a post job script that would compute frames render time and write a file that could be used for statistics.
 

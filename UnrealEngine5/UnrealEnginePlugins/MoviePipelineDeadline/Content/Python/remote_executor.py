@@ -61,6 +61,75 @@ def add_key_value(job_info, prefix, key, value):
     job_info[f"{prefix}{max(used, default=-1) + 1}"] = f"{key}={value}"
 
 
+def workspace_path(path, client_root):
+    """
+    path as "{ProjectRoot}/<path in the workspace>" when it is in the P4 workspace
+    rooted at client_root: JobPreLoad sets ProjectRoot to the render node's own
+    workspace root, so the render nodes don't need the submitter's drive and folders.
+    Else path unchanged.
+    """
+    if not path or not client_root or "{ProjectRoot}" in path:
+        return path
+    full = os.path.normcase(os.path.abspath(path))
+    root = os.path.normcase(os.path.abspath(client_root))
+    try:
+        in_workspace = os.path.commonpath([full, root]) == root
+    except ValueError:
+        in_workspace = False  # another drive
+    if not in_workspace:
+        unreal.log_warning(f"`{path}` is not in the P4 workspace ({client_root}): sent as is")
+        return path
+    return "{ProjectRoot}/" + os.path.relpath(os.path.abspath(path), os.path.abspath(client_root)).replace("\\", "/")
+
+
+def resolve_graph_output_directory(job, graph, directory=None):
+    """
+    The folder a graph job writes to, its tokens resolved by MRG as the render will:
+    {project_dir}, {sequence_name}, {shot_name}, {date}... from the job, its first
+    enabled shot and the graph evaluated with the job's variable overrides. For the
+    Monitor and the frames the worker looks for on disk (GPU crash resume).
+    Later shots may resolve to other folders ({shot_name}): the first one's is given.
+    {version} is kept, the render picks it.
+
+    :param directory: the job's output directory override, else the graph's
+        (Global Output node, variables applied)
+    """
+    shots = [shot for shot in job.shot_info if shot.enabled]
+    shot = shots[0] if shots else None
+
+    context = unreal.MovieGraphTraversalContext()
+    context.job = job
+    context.shot = shot
+    context.root_graph = graph
+    context.shot_count = max(len(shots), 1)
+    evaluated, error = graph.create_flattened_graph(context)
+    if not evaluated:
+        unreal.log_warning(f"Could not evaluate the graph for its output directory: {error}")
+        return directory or graph.get_output_directory()
+
+    if not directory:
+        node = evaluated.get_setting_for_branch(unreal.MovieGraphGlobalOutputSettingNode, "Globals")
+        directory = node.output_directory.path if node else graph.get_output_directory()
+
+    params = unreal.MovieGraphFilenameResolveParams()
+    params.job = job
+    params.shot = shot
+    params.evaluated_config = evaluated
+    params.initialization_time = unreal.MathLibrary.utc_now()
+    params.ensure_absolute_path = True
+    params.file_name_format_overrides = {"version": "{version}", "ext": "{ext}"}
+    # Without a branch, MRG fails an ensure looking up its settings
+    render_data = unreal.MovieGraphRenderDataIdentifier()
+    render_data.root_branch_name = "Globals"
+    params.render_data_identifier = render_data
+
+    resolved, _ = unreal.MovieGraphLibrary.resolve_filename_format_arguments(directory, params)
+    # Resolved as a file path: the extension comes last
+    if resolved.endswith(".{ext}"):
+        resolved = resolved[:-len(".{ext}")]
+    return resolved.rstrip("/")
+
+
 def get_mrg_resolution(graph, job=None):
     
     def find_resolution_var(g, job):
@@ -908,56 +977,36 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
         if job.get_graph_preset() :
             # MRG path
             graph = job.get_graph_preset()
-            output_dir = graph.get_output_directory()
-
-            # Resolve MRG tokens to actual values before sending to Deadline
-            if '{' in output_dir:
-                project_dir = unreal.Paths.convert_relative_path_to_full(
-                    unreal.Paths.project_dir()
-                ).rstrip('/').rstrip('\\')
-                
-                output_dir = output_dir.replace('{project_dir}', project_dir)
-                output_dir = output_dir.replace('{sequence_name}', new_job.job_name)
-                # add other tokens here as needed
-                unreal.log(f"Resolved output dir: {output_dir}")
-
-            # Warn if tokens remain unresolved
-            if '{' in output_dir:
-                unreal.log_warning(f"Output dir still contains unresolved tokens: {output_dir}")
-
-
+            output_dir = resolve_graph_output_directory(
+                new_job, graph, directory=new_job.output_directory_override.path or None
+            )
             output_file = ""
             output_resolution = get_mrg_resolution(graph, job=new_job)
             if not output_resolution:
                 unreal.log_warning("Render resolution not found in graph, defaulting to 1920x1080")
                 output_resolution = unreal.IntPoint(1920, 1080)
 
-            unreal.log(f"Output settings from Graph: {output_dir}, {output_file}")
+            unreal.log(f"Output directory from the graph: {output_dir}")
         else:
             # Classic MoviePipeline path
             output_setting = new_job.get_configuration().find_setting_by_class( unreal.MoviePipelineOutputSetting )
             if output_setting:
-                output_dir = output_setting.output_directory.path
+                output_dir = new_job.output_directory_override.path or output_setting.output_directory.path
                 output_file = output_setting.file_name_format
                 output_resolution = output_setting.output_resolution
                 unreal.log(f"Output settings from MoviePipeline: {output_dir}")
 
-        # Set the job output directory override on the deadline job
+        # The job's overrides, set by the worker on the graph (or the configuration).
+        # Without one, the graph's own folder stays: it may hold per shot tokens.
         if new_job.output_directory_override.path:
             add_key_value(job_info, "ExtraInfoKeyValue", "output_directory_override", new_job.output_directory_override.path)
-        else:
-            add_key_value(job_info, "ExtraInfoKeyValue", "output_directory_override", output_dir)
-
-
-        # Set the job filename format override on the deadline job
         if new_job.filename_format_override:
             add_key_value(job_info, "ExtraInfoKeyValue", "filename_format_override", new_job.filename_format_override)
 
-
-
-        # TODO: Resolve path formatting based on render settings to make it understandable by Deadline
-        # The job's override is where the frames go (the worker sets it on the graph)
-        job_info["OutputDirectory0"] = new_job.output_directory_override.path or output_dir
+        # Where the frames go, resolved: the Monitor's output folder, and where the
+        # worker looks for frames on disk (JobPreLoad, GPU crash resume)
+        add_key_value(job_info, "ExtraInfoKeyValue", "output_directory", output_dir)
+        job_info["OutputDirectory0"] = output_dir
 
         # TODO: Resolve filename format based on render settings to make it understandable by Deadline
         job_info["OutputFilename0"] = new_job.filename_format_override or output_file
@@ -994,6 +1043,12 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
         if not plugin_info.get("ProjectFile"):
             project_file = plugin_info.get("ProjectFile", game_name_or_project_file)
             plugin_info["ProjectFile"] = project_file
+
+        # The .uproject in the workspace, not on this machine's drive
+        plugin_info["ProjectFile"] = workspace_path(
+            plugin_info["ProjectFile"], p4_utils.get_client_root(p4, logger=_UnrealLogger)
+        )
+        unreal.log(f"Project file for the render nodes: {plugin_info['ProjectFile']}")
 
         # This is the map included in the plugin to boot up to.
         project_cmd_args = [

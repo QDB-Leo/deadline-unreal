@@ -42,10 +42,6 @@ class MRQRender(BaseRPC):
             if not serialized_pipeline:
                 return
 
-            unreal.log(
-                f"Executing Serialized Pipeline: `{serialized_pipeline}`"
-            )
-
             # create temp manifest folder
             movieRenderPipeline_dir = os.path.join(
                 unreal.SystemLibrary.get_project_saved_directory(),
@@ -62,7 +58,8 @@ class MRQRender(BaseRPC):
                 prefix='TempManifest',
                 extension='.utxt')
 
-            unreal.log(f"Saving Manifest file `{manifest_file}`")
+            # The manifest itself is some 100 KB: its size and file only
+            unreal.log(f"Saving the job's manifest ({len(serialized_pipeline)} characters) to `{manifest_file}`")
 
             # Dump the manifest data into the manifest file
             with open(manifest_file, "w") as manifest:

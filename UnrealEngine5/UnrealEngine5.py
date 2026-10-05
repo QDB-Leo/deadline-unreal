@@ -301,7 +301,7 @@ class UnrealEnginePlugin(DeadlinePlugin):
         older ones, without comparing clocks (the output may be on a file server).
         """
         snapshot = {}
-        output_dir = self.GetJob().GetJobExtraInfoKeyValue("output_directory_override")
+        output_dir = self.GetJob().GetJobExtraInfoKeyValue("output_directory")
         if not output_dir or not os.path.isdir(output_dir):
             return snapshot
         for root, _, files in os.walk(output_dir):
@@ -324,7 +324,7 @@ class UnrealEnginePlugin(DeadlinePlugin):
         Files from an earlier render of the shot don't count, however recent.
         """
         job = self.current_job()
-        output_dir = job.GetJobExtraInfoKeyValue("output_directory_override")
+        output_dir = job.GetJobExtraInfoKeyValue("output_directory")
         if not output_dir or not os.path.isdir(output_dir):
             self.LogWarning(f"[GPU crash] output dir not found: {output_dir}")
             return None

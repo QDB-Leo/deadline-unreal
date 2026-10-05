@@ -138,16 +138,8 @@ def __main__(deadline_plugin):
         synced_cl = str(sync_target if sync else local_cl)
         deadline_plugin.LogInfo(f"Rendering the workspace at CL {synced_cl}")
 
-#__________________Output directory override____________________
-
     # Changes saved on the job as it is now: the one loaded when the task started
     # would undo what was changed in the Monitor since
     job = RepositoryUtils.GetJob(job.JobId, True)
     job.SetJobExtraInfoKeyValue("synced_cl", synced_cl)
-
-    # update job output directory
-    output_directory_override = job.GetJobExtraInfoKeyValue("output_directory_override")
-    if output_directory_override and os.path.isdir(output_directory_override):
-        RepositoryUtils.SetJobOutputDirectories(job, [output_directory_override])
-
     RepositoryUtils.SaveJob(job)

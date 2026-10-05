@@ -94,6 +94,20 @@ def get_latest_submitted_cl(p4, logger=None, path=None):
         if p4.connected():
             p4.disconnect()
 
+def get_client_root(p4, logger=None):
+    """Local root of the workspace p4 is set to, or None if P4 can't tell."""
+    try:
+        p4.connect()
+        root = p4.run_info()[0].get("clientRoot")
+        return root if root and root != "*unknown*" else None
+    except P4Exception as e:
+        _log(logger, "warning", f"P4 error (get_client_root): {e}")
+        return None
+    finally:
+        if p4.connected():
+            p4.disconnect()
+
+
 def get_opened_files(p4, path, logger=None):
     """
     Local paths of the files opened (checked out, added, deleted) in the workspace under

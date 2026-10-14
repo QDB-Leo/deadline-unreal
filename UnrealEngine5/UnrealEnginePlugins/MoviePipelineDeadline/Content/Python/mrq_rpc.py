@@ -10,6 +10,7 @@ from deadline_rpc import BaseRPC
 from deadline_progress_executor import DeadlineProgressExecutor, add_shot_finished_callable, register_proxy
 
 from mrq_cli_modes import render_queue_manifest
+from mrq_cli_modes.utils import RENDER_SETTINGS
 
 
 class MRQRender(BaseRPC):
@@ -148,6 +149,25 @@ class MRQRender(BaseRPC):
             except Exception as err:
                 unreal.log_warning(f"Could not read task frames from Deadline: {err}")
 
+        # Render settings shown in the job's Extra Info N (RENDER_SETTINGS), as they are
+        # now: changed in the Monitor since the submission, the graph takes the new value
+        render_settings = {}
+        for name, setting in RENDER_SETTINGS.items():
+            value = str(self.proxy.get_job_extra_info(setting.extra_info) or "").strip()
+            if not value:
+                continue
+            try:
+                render_settings[name] = int(value)
+                valid = render_settings[name] >= setting.minimum
+            except ValueError:
+                valid = False
+            if not valid:
+                self.proxy.fail_render(
+                    f"Extra Info {setting.extra_info} ({name}) is `{value}`: "
+                    f"a whole number of at least {setting.minimum}, or empty"
+                )
+                return
+
         if not self._get_serialized_pipeline():
             self.proxy.fail_render("No serialized_pipeline in the job's extra info: nothing to render")
             return
@@ -158,7 +178,8 @@ class MRQRender(BaseRPC):
             output_dir_override=output_dir if output_dir else None,
             filename_format_override=filename_format if filename_format else None,
             frame_range_override=frame_range_override,
-            override_output=override_output
+            override_output=override_output,
+            render_settings=render_settings
         )
 
     def render_serialized_pipeline(
@@ -168,7 +189,8 @@ class MRQRender(BaseRPC):
         output_dir_override=None,
         filename_format_override=None,
         frame_range_override=None,
-        override_output=None
+        override_output=None,
+        render_settings=None
     ):
         """
         Executes a render using a manifest file
@@ -179,6 +201,7 @@ class MRQRender(BaseRPC):
         :param str filename_format_override: Movie Pipeline filename format override
         :param tuple frame_range_override: Frame range override from Deadline, see apply_frame_range_override
         :param bool override_output: Overwrite the existing output files
+        :param dict render_settings: Graph render settings set in Deadline, see apply_render_settings
         """
         unreal.log(f"Rendering shots: {shots}")
 
@@ -206,7 +229,8 @@ class MRQRender(BaseRPC):
             output_dir_override=output_dir_override,
             output_filename_override=filename_format_override,
             frame_range_override=frame_range_override,
-            override_output=override_output
+            override_output=override_output,
+            render_settings=render_settings
         )
 
     def _get_executor_instance(self):

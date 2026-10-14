@@ -6,7 +6,8 @@ This is still a WIP but helps me a lot. I'm using it with UE 5.7
 
 Major changes from DwarfLabs version :
 - Supports MRG, retrieves correct resolution from either job override, node value or subgraph
-  Graph variables the plugin reads or sets (`Start`/`End`, `TemporalSampleCount`) follow the render's precedence: in the job's graph, the job override if checked, else the variable's value; absent from the job's graph, the same in the first subgraph that has it (e.g. a parent graph). An unchecked override is never used. Everything the render needs travels in the job's serialized manifest; what the plugin computes (Deadline frames, `-ResX/-ResY`, the temporal samples shown in the Monitor) mirrors it.
+  Graph variables the plugin reads or sets (`Start`/`End`) follow the render's precedence: in the job's graph, the job override if checked, else the variable's value; absent from the job's graph, the same in the first subgraph that has it (e.g. a parent graph). An unchecked override is never used. Everything the render needs travels in the job's serialized manifest; what the plugin computes (Deadline frames, `-ResX/-ResY`, the render settings shown in the Monitor) mirrors it.
+- Render settings editable in Deadline: the temporal samples (Extra Info 0) and warm-up frames (Extra Info 1) the graph renders with are shown in the Monitor. Change one in the job's properties (Extra Info) and requeue: the worker sets it back on the graph before each task. See [Render settings](#render-settings).
 - Render progress tracking inside Deadline Task
 - Changed handling of P4 connection (ticket-based), syncs to head by default
 - FrameRange override support, so you can change framerange inside Deadline and requeue. Used in conjonction with a perforce change pushed to depot so you don't have to resubmit a job.
@@ -68,9 +69,24 @@ Each value the job carries has one place, set by what reads it:
   - Set in the job preset: `P4_workspace_prefix` (else the project name), `SyncToSpecificCL`, `SyncSubPath`.
   - Set at submission: `P4_PORT`, `P4_USER`, `P4_CL`, `serialized_pipeline`, `shot_info`, `original_frame_range`, `frame_range_mode`, `frames_remapped`, `output_directory` (resolved, where the worker looks for frames), and the job's own overrides only: `output_directory_override`, `filename_format_override`.
   - Written by the worker: `synced_cl`, `lastframerendered`, `lastframerenderedtime`, `gpu_crash_resume`.
-- **ExtraInfo0-9**: Monitor columns, display only, never read by the code. `ExtraInfo0` is the temporal sample count, `ExtraInfo9` `submitted_cl`: leave them free in the preset.
+- **ExtraInfo0-9**: Monitor columns. `ExtraInfo0` and `ExtraInfo1` are render settings, the temporal sample count and warm-up frame count, read back by the worker (see [Render settings](#render-settings)); `ExtraInfo9` is `submitted_cl`, display only. Leave them free in the preset.
 
 A key in the wrong place is ignored without any error: a preset that sets `SyncToSpecificCL` or `P4_workspace_prefix` in its environment must move it to its Extra Info Key Values.
+
+## Render settings
+
+Some render settings of a graph job are shown in the Monitor and can be changed there, without submitting the job again:
+
+| Extra Info | Setting | Graph node (Globals) |
+|---|---|---|
+| 0 | temporal samples (`TemporalSampleCount`) | Sampling Method |
+| 1 | warm-up frames (`NumWarmUpFrames`) | Warm Up Settings |
+
+At submission each one is the value the graph renders the job's first shot with: the graph evaluated with the job's variable overrides, as MRG does, so whatever sets it (the node, a variable wired to it, a subgraph). A setting whose node is in neither the graph nor its subgraphs is left empty.
+
+To change one: the job's properties in the Monitor, **Extra Info**, set the new value (e.g. warm-up frames `16` to `32`), then requeue the tasks. Before each task the worker reads the Extra Info as it is then (`get_job_extra_info`, the job reloaded from the repository) and, for the settings that differ from what the graph renders with, sets them on each of the setting's nodes, in the graph and its subgraphs: on the job's override of the variable wired to the property when there is one, else on the node's property. It then evaluates the graph again for each shot of the task; a setting still not at the asked value fails the task with the reason (no such node in the graph, property wired to something else than a variable), as does a value that isn't a whole number (at least 1 temporal sample, 0 warm-up frames). Empty means as submitted. The graph assets are only changed in memory, never saved.
+
+`RENDER_SETTINGS` (`mrq_cli_modes/utils.py`) lists them: another Globals node property is one more line there.
 
 ## Map preload
 
@@ -142,6 +158,7 @@ Click on **Render remote** and that's it :)
 
 - Forced command line argument `-renderoffscreen`, as typical renderfarm worker do not have the UI setup and live render preview is unnecessary.
 - Removed the command line mode (`CommandLineMode`, Unreal in `-game` with a manifest file) and its **Submit Movie Render Queue Asset** menu: it had no Python (no Kitsu callbacks, no map preload), applied no graph override, frame range or GPU crash resume, and reported failures through the exit code only.
+- Render settings in the Monitor's Extra Info (temporal samples, warm-up frames), read from the evaluated graph instead of a `TemporalSampleCount` variable, and applied back by the worker when changed in Deadline. See [Render settings](#render-settings).
 - Added the **Game Mode** plugin info entry (off by default): the same RPC render as in the editor, in Unreal started with `-game`. See [Game mode](#game-mode).
 - Added a **JobPreLoad** that will sync the local Perforce repository based on the CL provided for the job.
 - Added a custom pre-script to run at Unreal's opening. Allows to do some process before the render tasks starts.

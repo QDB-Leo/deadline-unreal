@@ -12,6 +12,7 @@ from .utils import (
     update_render_output,
     apply_graph_output_overrides,
     apply_frame_range_override,
+    apply_render_settings,
     keep_graphs_loaded
 )
 
@@ -36,7 +37,8 @@ def render_jobs(
     output_dir_override=None,
     output_filename_override=None,
     frame_range_override=None,
-    override_output=None
+    override_output=None,
+    render_settings=None
 ):
     """
     This renders the current state of the queue
@@ -50,6 +52,7 @@ def render_jobs(
     :param str output_filename_override: Movie Pipeline filename format override
     :param tuple frame_range_override: (start, end exclusive[, use_output_node]), see apply_frame_range_override
     :param bool override_output: Overwrite the existing output files (None: as the job has it)
+    :param dict render_settings: Graph render settings set in Deadline, see apply_render_settings
     :return: MRQ executor
     """
 
@@ -91,6 +94,11 @@ def render_jobs(
         # Modifying directly the various settings class does not make the config dirty
         # and when rendering starts, the config is reset to the default saved one.
         job.set_configuration(config)
+
+        if render_settings:
+            if not job.get_graph_preset():
+                raise RuntimeError(f"Render settings set in Deadline ({render_settings}) only apply to graph jobs")
+            apply_render_settings(job, render_settings)
 
         if frame_range_override:
             apply_frame_range_override(job, *frame_range_override)

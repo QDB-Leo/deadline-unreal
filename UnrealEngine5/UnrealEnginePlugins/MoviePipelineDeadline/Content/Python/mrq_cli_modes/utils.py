@@ -2,6 +2,7 @@
 
 import unreal
 
+from collections import namedtuple
 from getpass import getuser
 
 # The render queue. In the editor, the MRQ queue subsystem's (the Movie Render Queue
@@ -467,6 +468,127 @@ def get_graph_variable_value(job, graph, name):
     if overrides.get_variable_assignment_enable_state(variable):
         return overrides.get_value_serialized_string(variable)
     return variable.get_value_serialized_string()
+
+
+RenderSetting = namedtuple("RenderSetting", "extra_info node_class prop minimum")
+
+# Render settings of a graph job shown in the Monitor, in the job's Extra Info N, and
+# set back on the graph by the worker before each task: change one in the job's
+# properties and requeue. Each is a property of a Globals node, keyed by the
+# property's name (its pin on the node).
+RENDER_SETTINGS = {
+    "TemporalSampleCount": RenderSetting(0, "MovieGraphSamplingMethodNode", "temporal_sample_count", 1),
+    "NumWarmUpFrames": RenderSetting(1, "MovieGraphWarmUpSettingNode", "num_warm_up_frames", 0),
+}
+
+
+def evaluate_job_graph(job, graph, shot=None, shot_count=1):
+    """
+    The job's graph flattened for one shot, with the job's variable overrides, as
+    MRG evaluates it for the render: (evaluated config or None, error)
+    """
+    context = unreal.MovieGraphTraversalContext()
+    context.job = job
+    context.shot = shot
+    context.root_graph = graph
+    context.shot_count = shot_count
+    return graph.create_flattened_graph(context)
+
+
+def _render_setting_nodes(graph, setting):
+    """
+    The setting's nodes in the Globals of the graph and of its subgraphs, as
+    (graph, node)
+    """
+    node_class = getattr(unreal, setting.node_class)
+    return [
+        (g, node)
+        for g in [graph] + list(graph.get_all_contained_subgraphs())
+        for node in g.get_nodes_for_branch(node_class, "Globals", False)
+    ]
+
+
+def get_render_settings(job, shot=None, shot_count=1):
+    """
+    The RENDER_SETTINGS a graph job renders a shot with, as {name: value}: from the
+    graph evaluated with the job's variable overrides, so whatever sets them (a
+    variable wired to the node, a subgraph, the node itself). Only the settings
+    whose node is in the graph or its subgraphs: the others can't be changed.
+    """
+    graph = job.get_graph_preset()
+    evaluated, error = evaluate_job_graph(job, graph, shot, shot_count)
+    if not evaluated:
+        raise RuntimeError(f"Could not evaluate the graph `{graph.get_name()}`: {error}")
+
+    values = {}
+    for name, setting in RENDER_SETTINGS.items():
+        if _render_setting_nodes(graph, setting):
+            node = evaluated.get_setting_for_branch(getattr(unreal, setting.node_class), "Globals")
+            values[name] = node.get_editor_property(setting.prop)
+    return values
+
+
+def apply_render_settings(job, requested):
+    """
+    Sets the render settings asked in Deadline ({name: value}, see RENDER_SETTINGS)
+    on a graph job, those that differ from what it renders with: on each of the
+    setting's nodes, the job override of the variable wired to the property, else
+    the property on the node. Changes the job and the loaded graphs only (not
+    saved). Then checks that every enabled shot renders with them.
+
+    :raises RuntimeError: a setting the graph doesn't take (no such node, property
+        wired to something else than a variable)
+    """
+    graph = job.get_graph_preset()
+    shots = [shot for shot in job.shot_info if shot.enabled] or [None]
+
+    def mismatches():
+        found = {}
+        for shot in shots:
+            current = get_render_settings(job, shot, len(shots))
+            for name, value in requested.items():
+                if current.get(name) != value:
+                    found[name] = current.get(name)
+        return found
+
+    to_change = mismatches()
+    if not to_change:
+        unreal.log(f"Render settings as in Deadline: {requested}")
+        return
+
+    for name, current in to_change.items():
+        setting = RENDER_SETTINGS[name]
+        value = requested[name]
+        unreal.log(f"`{name}` changed in Deadline (Extra Info {setting.extra_info}): {current} -> {value}")
+        for owner, node in _render_setting_nodes(graph, setting):
+            pin = node.get_input_pin(name)
+            source = pin.get_first_connected_pin(True) if pin and pin.is_connected() else None
+            if not source:
+                node.set_editor_property(setting.prop, value)
+                node.set_editor_property(f"override_{setting.prop}", True)
+                unreal.log(f"`{name}` = {value} on `{node.get_name()}` of `{owner.get_name()}`")
+            elif isinstance(source.node, unreal.MovieGraphVariableNode):
+                variable = source.node.get_variable()
+                overrides = job.get_or_create_variable_overrides(owner)
+                overrides.set_value_serialized_string(variable, str(value))
+                overrides.set_variable_assignment_enable_state(variable, True)
+                unreal.log(f"`{name}` = {value} through the variable `{variable.get_member_name()}` of `{owner.get_name()}`")
+            else:
+                unreal.log_warning(
+                    f"`{name}` of `{node.get_name()}` in `{owner.get_name()}` comes from "
+                    f"`{source.node.get_name()}`, not a variable: not set"
+                )
+
+    left = mismatches()
+    if left:
+        raise RuntimeError(
+            "Render settings changed in Deadline that the graph doesn't take: " + ", ".join(
+                f"{name} = {requested[name]} (Extra Info {RENDER_SETTINGS[name].extra_info}), "
+                + (f"renders with {current}" if current is not None else f"no {RENDER_SETTINGS[name].node_class} in the graph")
+                for name, current in left.items()
+            )
+        )
+    unreal.log(f"Render settings from Deadline applied: {requested}")
 
 
 def apply_frame_range_override(job, start_frame, end_frame, use_output_node=False):

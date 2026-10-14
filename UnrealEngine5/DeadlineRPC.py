@@ -105,6 +105,15 @@ class BaseDeadlineRPCJobManager:
         # more feature/task agnostic
         return self._job.GetJobExtraInfoKeyValue(name)
 
+    def get_job_extra_info(self, index):
+        """
+        Returns the job's Extra Info <index> (0-9, the Monitor's columns) as it is
+        now: it may have been changed in the job's properties since the task started
+        :param index: Extra Info number
+        """
+        job = RepositoryUtils.GetJob(self._job.JobId, True)
+        return getattr(job, f"JobExtraInfo{int(index)}") or ""
+
     def get_plugin_info_entry(self, name, default=""):
         """
         Returns a plugin info entry of the job (the UnrealEngine5 settings in the

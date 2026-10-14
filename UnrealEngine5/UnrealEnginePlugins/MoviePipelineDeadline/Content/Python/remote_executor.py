@@ -16,7 +16,14 @@ from deadline_job import DeadlineJob
 from deadline_utils import get_deadline_info_from_preset
 
 import p4_utils
-from mrq_cli_modes.utils import find_graph_variable, get_graph_variable_value, get_output_node_range
+from mrq_cli_modes.utils import (
+    RENDER_SETTINGS,
+    evaluate_job_graph,
+    find_graph_variable,
+    get_graph_variable_value,
+    get_output_node_range,
+    get_render_settings,
+)
 
 
 project_root = unreal.Paths.project_dir()
@@ -97,12 +104,7 @@ def resolve_graph_output_directory(job, graph, directory=None):
     shots = [shot for shot in job.shot_info if shot.enabled]
     shot = shots[0] if shots else None
 
-    context = unreal.MovieGraphTraversalContext()
-    context.job = job
-    context.shot = shot
-    context.root_graph = graph
-    context.shot_count = max(len(shots), 1)
-    evaluated, error = graph.create_flattened_graph(context)
+    evaluated, error = evaluate_job_graph(job, graph, shot, max(len(shots), 1))
     if not evaluated:
         unreal.log_warning(f"Could not evaluate the graph for its output directory: {error}")
         return directory or graph.get_output_directory()
@@ -952,25 +954,20 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
             unreal.log_warning("Play Rate / Time Warp track in the sequence: no resume after a GPU crash")
         add_key_value(job_info, "ExtraInfoKeyValue", "frames_remapped", int(frames_remapped))
 
-        # --- Temporal Sample Count (Movie Render Graph variable) ---
-        # Reads "TemporalSampleCount" int variable from the graph preset if it exists,
-        # and exposes it in ExtraInfo0 for visibility in Deadline Monitor.
-        # The job's checked override, else the variable's value, in the graph or else a
-        # subgraph (get_graph_variable_value): an unchecked override isn't what renders.
-        temporal_sample_count = None
-        graph_config = job.get_graph_preset()
-        if graph_config:
-            serialized = get_graph_variable_value(new_job, graph_config, "TemporalSampleCount")
-            if serialized:
-                temporal_sample_count = int(serialized)
-                unreal.log(f"TemporalSampleCount from graph: {temporal_sample_count}")
-            else:
-                unreal.log_warning("Variable 'TemporalSampleCount' not found in graph preset")
-        else:
-            unreal.log_warning("No graph preset on job, skipping TemporalSampleCount lookup")
-
-        if temporal_sample_count is not None:
-            job_info["ExtraInfo0"] = str(temporal_sample_count)
+        # Render settings (temporal samples, warm-up frames...) in the job's Extra Info N,
+        # which the worker sets back on the graph when changed in the Monitor
+        # (RENDER_SETTINGS): what the graph renders the first shot with, the job's
+        # variables applied
+        if new_job.get_graph_preset():
+            shots_enabled = [shot for shot in new_job.shot_info if shot.enabled]
+            try:
+                render_settings = get_render_settings(new_job, shots_enabled[0], len(shots_enabled))
+            except RuntimeError as err:
+                unreal.log_warning(f"Render settings not shown in the Monitor: {err}")
+                render_settings = {}
+            for name, value in render_settings.items():
+                unreal.log(f"{name} from the graph: {value} (Extra Info {RENDER_SETTINGS[name].extra_info})")
+                job_info[f"ExtraInfo{RENDER_SETTINGS[name].extra_info}"] = str(value)
 
 
         # Tell Deadline job about output directory and filename

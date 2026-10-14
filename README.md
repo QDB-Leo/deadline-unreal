@@ -61,8 +61,8 @@ To retrieve the local Perforce workspace, we use a pattern to match existing wor
 
 Each value the job carries has one place, set by what reads it:
 
-- **EnvironmentKeyValue**: only what the Unreal process must read itself, before it reaches Deadline through the RPC, as Deadline makes them its environment variables. `UEMAP_PATH` (the map the pre-script loads).
-- **PluginInfo**: how to run Unreal, editable in the Monitor's job properties (UnrealEngine5 settings). `Executable`, `ProjectFile`, `CommandLineArguments`, `OverrideExistingOutput`.
+- **EnvironmentKeyValue**: only what the Unreal process must read itself, before it reaches Deadline through the RPC, as Deadline makes them its environment variables. `UEMAP_PATH` (the map the pre-script loads when `PreloadMap` is on).
+- **PluginInfo**: how to run Unreal, editable in the Monitor's job properties (UnrealEngine5 settings). `Executable`, `ProjectFile`, `CommandLineArguments`, `OverrideExistingOutput`, `PreloadMap`.
 - **ExtraInfoKeyValue**: everything else, read by `JobPreLoad.py` and the Deadline plugin (or by Unreal through the RPC), and what they write during the render.
   - Set in the job preset: `P4_workspace_prefix` (else the project name), `SyncToSpecificCL`, `SyncSubPath`.
   - Set at submission: `P4_PORT`, `P4_USER`, `P4_CL`, `serialized_pipeline`, `shot_info`, `original_frame_range`, `frame_range_mode`, `frames_remapped`, `output_directory` (resolved, where the worker looks for frames), and the job's own overrides only: `output_directory_override`, `filename_format_override`.
@@ -70,6 +70,14 @@ Each value the job carries has one place, set by what reads it:
 - **ExtraInfo0-9**: Monitor columns, display only, never read by the code. `ExtraInfo0` is the temporal sample count, `ExtraInfo9` `submitted_cl`: leave them free in the preset.
 
 A key in the wrong place is ignored without any error: a preset that sets `SyncToSpecificCL` or `P4_workspace_prefix` in its environment must move it to its Extra Info Key Values.
+
+## Map preload
+
+`custom_unreal_prescript.py` runs as soon as Unreal is open on the worker, before the render. It can open the job's map in the editor first (`UEMAP_PATH`), for maps whose meshes or textures would not finish loading otherwise (not even at later frames or with lots of warm-up frames). This is **off by default**: set the `PreloadMap` plugin info entry to `true` to turn it on, in the job preset's Plugin Info for a whole project, or in the Monitor's job properties (UnrealEngine5 settings, **Preload Map**) for one job.
+
+The render doesn't need it to find the map: the Movie Render Queue renders in PIE, which loads the job's map itself (`GlobalMapOverride`) and duplicates it into the PIE world. What the preload changes is the copy PIE duplicates. Without it, PIE loads the map from disk, as it was saved. With it, the map is already open as the editor world, so PIE duplicates that editor world, with everything editor-side logic did to it after loading.
+
+Where it broke: a shot of `LB3P4_Intro` (`LB3P4_Intro_035_Anim`) whose level holds a custom Blueprint wrapper that references a Level Variant Set directly. With the preload, the wrapper and its Level Variant Set run in the editor world before the render, and the render failed: the worker log was filled with the sequence's spawnable bindings exported as text (`MovieSceneCopyableBinding`, a `DecalActor` spawnable among them). The same job rendered properly once `UEMAP_PATH` was removed from its environment, so without the preload. Turn the preload on only for a map that needs it, and not for a level with editor-side logic like this.
 
 
 # Branches and deploying to production
@@ -97,6 +105,15 @@ To test the Deadline side (`JobPreLoad.py`, `UnrealEngine5.py`, ...) on a farm t
 
 Only jobs whose Deadline job preset sets **Plugin** to `UnrealEngine5Dev` run that copy. Add a machine allowlist in the same preset to keep test jobs on your own Worker.
 
+To render an existing job (a production shot) on that copy, without submitting it again from Unreal:
+
+```powershell
+.\scripts\clone_job_to_dev.ps1 <job id>                                    # copy on UnrealEngine5Dev, allowlist = this machine, batch Testbed
+.\scripts\clone_job_to_dev.ps1 <job id> -PluginInfo @{ PreloadMap = 'true' } -Frames 0-9 -Suspended
+```
+
+Deadline can't change the plugin of a job, so this submits a new one with the original's frames, output, extra info, environment and plugin info (overrides with `-PluginInfo` / `-Environment`, an empty value removes the key). The Unreal side is still the one of the Worker's P4 workspace, not this repo's, and the render publishes to Kitsu like any other. Delete the copy once done.
+
 
 # How to use
 
@@ -115,6 +132,7 @@ Click on **Render remote** and that's it :)
 - Added a **JobPreLoad** that will sync the local Perforce repository based on the CL provided for the job.
 - Added a custom pre-script to run at Unreal's opening. Allows to do some process before the render tasks starts.
 - Added the sequence's map path to the job info so the pre-script can open it early, preventing issues with unfinished loading of meshes or textures (that would not even load at later frames or with lots of warmup frames).
+  Now opt-in, with the **Preload Map** plugin info entry (off by default): see [Map preload](#map-preload).
 - Fixed applying overrides to the Unreal job configuration (like output directory and filename). Modifying the configuration does not dirty it, and Unreal ignores overrides if it is not dirty.
 - Prevented processing of disabled Unreal jobs.
 - Fixed a crash when no job preset was assigned.

@@ -1069,6 +1069,9 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
                 # Overwrite the frames already on disk: a task rendered again replaces
                 # its frames instead of writing beside them (shot.0001.exr(2))
                 "OverrideExistingOutput": plugin_info.get("OverrideExistingOutput", "true"),
+                # Opt-in: the pre-script opens the job's map in the editor before the
+                # render (UEMAP_PATH). Off, PIE loads it from disk on its own
+                "PreloadMap": plugin_info.get("PreloadMap", "false"),
             }
         )
 

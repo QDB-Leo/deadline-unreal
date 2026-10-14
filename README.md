@@ -21,6 +21,7 @@ Major changes from DwarfLabs version :
 Todo :
 - GPU crash resume for sequences with a Play Rate / Time Warp track: map the output frames back to the sequence's
 - `get_mrg_resolution` takes the first struct variable whose value holds `Resolution=`, whatever its name: look for the variable wired to the output resolution, or by name
+- `output_directory_override` typed in the Unreal job's Deadline options override is not applied to the render, though the Monitor shows it in the job's Extra Info
 - `scripts/sync_to_p4.ps1`: no production path as `-Target` default in this public repository; take `-Target` or a per machine environment variable, as kitsu-unreal's `P4_PLUGINS_TARGET`
 
 

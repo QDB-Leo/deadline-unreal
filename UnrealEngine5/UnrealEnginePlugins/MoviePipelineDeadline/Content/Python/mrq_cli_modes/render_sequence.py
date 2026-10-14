@@ -10,7 +10,7 @@ from getpass import getuser
 from .render_queue_jobs import render_jobs
 from .utils import (
     movie_pipeline_queue,
-    project_settings,
+    get_project_settings,
     get_asset_data
 )
 
@@ -81,7 +81,7 @@ def render_current_sequence(
 
     render_job = movie_pipeline_queue.allocate_new_job(
         unreal.SystemLibrary.conv_soft_class_path_to_soft_class_ref(
-            project_settings.default_executor_job
+            get_project_settings().default_executor_job
         )
     )
 

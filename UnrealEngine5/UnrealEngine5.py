@@ -737,9 +737,16 @@ class UnrealEngineManagedProcess(ManagedProcess):
 
         uproject = resolve_uproject(self._deadline_plugin, self._executable_path)
 
+        # GameMode plugin info (false by default): Unreal in -game, the render in the
+        # game world instead of the editor's PIE
+        game_mode = self._deadline_plugin.GetPluginInfoEntryWithDefault("GameMode", "false")
+        game_mode = str(game_mode).strip().lower() in ("true", "1")
+        self._deadline_plugin.LogInfo(f"Game mode (-game): {game_mode}")
+
         # Set up the arguments to startup unreal.
         job_command_args = [
             '"{u_project}"'.format(u_project=uproject.as_posix()),
+            *(["-game"] if game_mode else []),
             self._deadline_plugin.GetPluginInfoEntryWithDefault("CommandLineArguments", ""),
             # Force "-log" otherwise there is no output from the executable
             "-log",

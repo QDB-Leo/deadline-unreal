@@ -1072,6 +1072,9 @@ class MoviePipelineDeadlineRemoteExecutor(unreal.MoviePipelineExecutorBase):
                 # Opt-in: the pre-script opens the job's map in the editor before the
                 # render (UEMAP_PATH). Off, PIE loads it from disk on its own
                 "PreloadMap": plugin_info.get("PreloadMap", "false"),
+                # Opt-in: the worker starts Unreal with -game instead of the editor
+                # (UnrealEngine5.py)
+                "GameMode": plugin_info.get("GameMode", "false"),
             }
         )
 

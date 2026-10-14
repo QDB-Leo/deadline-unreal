@@ -40,7 +40,7 @@ You can also define a default **Deadline job preset** in the project settings, i
 This asset defines default values for most of the Deadline job options, and allows to choose what options can or cannot be overriden by the user from the MRQ (though we had issues making Unreal correctly do that and ended up modifying the default shown properties in the c++ directly..).
 There is an example of such asset in the repository: **DJP_DeadlineJobPresetExample_EditorMode.uasset**.
 
-Each task runs in Unreal's editor (exactly like with the UI): the Deadline plugin starts an RPC server, Unreal a client, and Unreal asks Deadline what it should render. Unreal stays open between tasks of the same job, and Python and the editor blueprint nodes work (the Kitsu callbacks of the graphs need them). You can add the `-renderoffscreen` argument (in **CommandLineArguments**) to allow running this job on a farm as a service with no UI.
+Each task runs in Unreal's editor (exactly like with the UI), or in Unreal started with `-game` when the job's **Game Mode** is on (see [Game mode](#game-mode)): the Deadline plugin starts an RPC server, Unreal a client, and Unreal asks Deadline what it should render. Unreal stays open between tasks of the same job, and Python works (the Kitsu callbacks of the graphs need it), and in the editor the editor blueprint nodes too. You can add the `-renderoffscreen` argument (in **CommandLineArguments**) to allow running this job on a farm as a service with no UI.
 
 There is a dependancy on Perforce's python API. When sending a job to Deadline, the user needs to specify the Perforce's changelist id (CL) that the worker should sync to in order to do the render with the correct version of the project. This CL is then checked against Perforce to ensure its validity, and propose the user to use the last valid one if the provided CL is not valid.
 
@@ -62,7 +62,7 @@ To retrieve the local Perforce workspace, we use a pattern to match existing wor
 Each value the job carries has one place, set by what reads it:
 
 - **EnvironmentKeyValue**: only what the Unreal process must read itself, before it reaches Deadline through the RPC, as Deadline makes them its environment variables. `UEMAP_PATH` (the map the pre-script loads when `PreloadMap` is on).
-- **PluginInfo**: how to run Unreal, editable in the Monitor's job properties (UnrealEngine5 settings). `Executable`, `ProjectFile`, `CommandLineArguments`, `OverrideExistingOutput`, `PreloadMap`.
+- **PluginInfo**: how to run Unreal, editable in the Monitor's job properties (UnrealEngine5 settings). `Executable`, `ProjectFile`, `CommandLineArguments`, `OverrideExistingOutput`, `PreloadMap`, `GameMode`.
 - **ExtraInfoKeyValue**: everything else, read by `JobPreLoad.py` and the Deadline plugin (or by Unreal through the RPC), and what they write during the render.
   - Set in the job preset: `P4_workspace_prefix` (else the project name), `SyncToSpecificCL`, `SyncSubPath`.
   - Set at submission: `P4_PORT`, `P4_USER`, `P4_CL`, `serialized_pipeline`, `shot_info`, `original_frame_range`, `frame_range_mode`, `frames_remapped`, `output_directory` (resolved, where the worker looks for frames), and the job's own overrides only: `output_directory_override`, `filename_format_override`.
@@ -78,6 +78,18 @@ A key in the wrong place is ignored without any error: a preset that sets `SyncT
 The render doesn't need it to find the map: the Movie Render Queue renders in PIE, which loads the job's map itself (`GlobalMapOverride`) and duplicates it into the PIE world. What the preload changes is the copy PIE duplicates. Without it, PIE loads the map from disk, as it was saved. With it, the map is already open as the editor world, so PIE duplicates that editor world, with everything editor-side logic did to it after loading.
 
 Where it broke: a shot of `LB3P4_Intro` (`LB3P4_Intro_035_Anim`) whose level holds a custom Blueprint wrapper that references a Level Variant Set directly. With the preload, the wrapper and its Level Variant Set run in the editor world before the render, and the render failed: the worker log was filled with the sequence's spawnable bindings exported as text (`MovieSceneCopyableBinding`, a `DecalActor` spawnable among them). The same job rendered properly once `UEMAP_PATH` was removed from its environment, so without the preload. Turn the preload on only for a map that needs it, and not for a level with editor-side logic like this.
+
+## Game mode
+
+By default the worker starts Unreal as the editor and renders in Play In Editor (`MoviePipelinePIEExecutor`). With the `GameMode` plugin info entry set to `true`, the Deadline plugin starts it with `-game` instead (`UnrealEngine5.py`), and the render runs in the game world with `MoviePipelineInProcessExecutor`: Unreal opens on `MoviePipelineEntryMap`, then the executor opens the job's map for each task.
+
+Everything else is the same as in the editor: the RPC with Deadline (tasks, progress, failures), the Kitsu callbacks of the graph, the graph output overrides, the frame range set in Deadline, GPU crash resume, several tasks in one Unreal session. What `-game` doesn't have is the editor's modules: editor-only Blueprint nodes and editor utilities don't run, and the map preload doesn't apply (there's no editor world).
+
+One difference the plugin makes up for: the in-process executor ignores a render that ends unsuccessfully (a pipeline error shuts it down early) and finishes as if it had succeeded. `deadline_progress_executor.py` binds the pipeline's end and reports it as an error of the executor, so the task fails as it does in the editor. A cancel doesn't exist in `-game` (no UI): Unreal quitting mid-render fails the task like any process exit.
+
+`GameMode` is false by default: new Deadline job presets get it in their Plugin Info set to `false`, submission sends `false` when the preset doesn't have it, and the Monitor shows it as **Game Mode** in the UnrealEngine5 settings. To render a project or a job in `-game`, set it to `true` in the job preset's Plugin Info, or for one job in the Monitor's job properties (before its task starts).
+
+The worker code that the editor and `-game` share only uses what both have: the editor-only classes (`MoviePipelineQueueSubsystem`, `MoviePipelinePIEExecutor`, `MovieRenderPipelineProjectSettings`) are only read when they exist (`mrq_cli_modes/utils.py`, `deadline_progress_executor.py`).
 
 
 # Branches and deploying to production
@@ -128,7 +140,8 @@ Click on **Render remote** and that's it :)
 # List of changes
 
 - Forced command line argument `-renderoffscreen`, as typical renderfarm worker do not have the UI setup and live render preview is unnecessary.
-- Removed the command line mode (`CommandLineMode`, Unreal in `-game` with a manifest file) and its **Submit Movie Render Queue Asset** menu: it had no Python (no Kitsu callbacks, no map preload), applied no graph override, frame range or GPU crash resume, and reported failures through the exit code only. Every job renders in the editor.
+- Removed the command line mode (`CommandLineMode`, Unreal in `-game` with a manifest file) and its **Submit Movie Render Queue Asset** menu: it had no Python (no Kitsu callbacks, no map preload), applied no graph override, frame range or GPU crash resume, and reported failures through the exit code only.
+- Added the **Game Mode** plugin info entry (off by default): the same RPC render as in the editor, in Unreal started with `-game`. See [Game mode](#game-mode).
 - Added a **JobPreLoad** that will sync the local Perforce repository based on the CL provided for the job.
 - Added a custom pre-script to run at Unreal's opening. Allows to do some process before the render tasks starts.
 - Added the sequence's map path to the job info so the pre-script can open it early, preventing issues with unfinished loading of meshes or textures (that would not even load at later frames or with lots of warmup frames).

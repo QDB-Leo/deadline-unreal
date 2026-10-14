@@ -4,20 +4,47 @@ import unreal
 
 from getpass import getuser
 
-# Get a render queue
-pipeline_subsystem = unreal.get_editor_subsystem(
-    unreal.MoviePipelineQueueSubsystem
-)
-
-# Get the project settings
-project_settings = unreal.get_default_object(
-    unreal.MovieRenderPipelineProjectSettings
-)
-
-# Get the pipeline queue
-movie_pipeline_queue = pipeline_subsystem.get_queue()
+# The render queue. In the editor, the MRQ queue subsystem's (the Movie Render Queue
+# window's). In -game (GameMode plugin info) the editor modules don't exist: a queue
+# of our own, that the executor renders directly (execute_render)
+if hasattr(unreal, "MoviePipelineQueueSubsystem"):
+    pipeline_subsystem = unreal.get_editor_subsystem(
+        unreal.MoviePipelineQueueSubsystem
+    )
+    movie_pipeline_queue = pipeline_subsystem.get_queue()
+else:
+    pipeline_subsystem = None
+    movie_pipeline_queue = unreal.new_object(unreal.MoviePipelineQueue)
 
 pipeline_executor = None
+
+# Graphs of the jobs being rendered, changed in memory by the overrides (output,
+# frame range) and never saved: referenced here until the next render. In -game the
+# executor opens the job's map, which collects garbage: an unreferenced graph would
+# be reloaded from disk, without the overrides
+_graphs_in_render = []
+
+
+def keep_graphs_loaded(jobs):
+    """
+    Keep the graphs (and subgraphs) of these jobs loaded until the next call, so
+    their in-memory overrides reach the render. See _graphs_in_render.
+    """
+    global _graphs_in_render
+    graphs = []
+    for job in jobs:
+        graph = job.get_graph_preset()
+        if graph:
+            graphs += [graph] + list(graph.get_all_contained_subgraphs())
+    _graphs_in_render = graphs
+
+
+def get_project_settings():
+    """
+    The Movie Render Pipeline project settings. Editor-only: read when needed, not
+    at import, so this module loads in -game
+    """
+    return unreal.get_default_object(unreal.MovieRenderPipelineProjectSettings)
 
 
 def get_executor_instance(is_remote):
@@ -28,6 +55,7 @@ def get_executor_instance(is_remote):
     :return: Executor instance
     """
     is_soft_class_object = True
+    project_settings = get_project_settings()
     # Convert the SoftClassPath into a SoftClassReference.
     # local executor class from the project settings
     try:
@@ -92,7 +120,11 @@ def execute_render(is_remote=False, executor_instance=None, is_cmdline=False):
     unreal.log("MRQ job started...")
     unreal.log(f"Is remote render: {is_remote}")
 
-    pipeline_subsystem.render_queue_with_executor_instance(executor_instance)
+    if pipeline_subsystem:
+        pipeline_subsystem.render_queue_with_executor_instance(executor_instance)
+    else:
+        # -game: no subsystem, the in-process executor loads the job's map itself
+        executor_instance.execute(movie_pipeline_queue)
 
     return executor_instance
 

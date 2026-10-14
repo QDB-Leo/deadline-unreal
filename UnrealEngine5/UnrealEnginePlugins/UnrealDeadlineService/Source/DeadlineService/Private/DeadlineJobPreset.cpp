@@ -63,4 +63,10 @@ void UDeadlineJobPreset::SetupPluginInfo()
 	{
 		JobPresetStruct.PluginInfo.Add("CommandLineArguments","-log");
 	}
+	// Unreal in -game on the worker instead of the editor (UnrealEngine5.py), off
+	// unless the preset or the job (Monitor) sets it
+	if (!JobPresetStruct.PluginInfo.Contains("GameMode"))
+	{
+		JobPresetStruct.PluginInfo.Add("GameMode", "false");
+	}
 }

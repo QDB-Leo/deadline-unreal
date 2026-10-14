@@ -28,7 +28,12 @@ map_path = os.environ.get("UEMAP_PATH")
 # PIE duplicates that editor world, with whatever editor-side logic changed in it
 # after loading (see README, "Map preload"). Off, PIE loads the map from disk.
 if map_path:
-    if preload_map_enabled():
+    _, switches, _ = unreal.SystemLibrary.parse_command_line(unreal.SystemLibrary.get_command_line())
+    if "game" in (switch.lower() for switch in switches):
+        # -game (GameMode plugin info): no editor world to preload into, the render
+        # opens the job's map itself
+        unreal.log_warning(f"map not preloaded (-game): {map_path}")
+    elif preload_map_enabled():
         unreal.log_warning(f"preloading map {map_path}")
         unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).load_level(map_path)
     else:

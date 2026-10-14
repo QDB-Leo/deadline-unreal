@@ -57,6 +57,16 @@ Required=false
 DisableIfBlank=false
 Default=false
 
+[GameMode]
+Type=boolean
+Label=Game Mode
+Category=Project
+Index=4
+Description=Start Unreal with -game: the render runs in the game world instead of the editor's Play In Editor, without the editor's modules (editor-only Blueprint nodes and editor utilities don't run, no map preload). Off (default), Unreal starts as the editor
+Required=false
+DisableIfBlank=false
+Default=false
+
 [ProgressRegex]
 Type=string
 Label=Progress Regular Expression

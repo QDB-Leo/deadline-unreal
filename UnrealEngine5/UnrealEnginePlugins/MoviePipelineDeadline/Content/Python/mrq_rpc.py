@@ -7,7 +7,7 @@ import json
 import unreal
 
 from deadline_rpc import BaseRPC
-from deadline_progress_executor import DeadlineProgressExecutor, register_proxy
+from deadline_progress_executor import DeadlineProgressExecutor, add_shot_finished_callable, register_proxy
 
 from mrq_cli_modes import render_queue_manifest
 
@@ -188,8 +188,8 @@ class MRQRender(BaseRPC):
         # Set executor callbacks
 
         # Set shot finished callbacks
-        executor.on_individual_shot_work_finished_delegate.add_callable(
-            self._on_individual_shot_finished_callback
+        add_shot_finished_callable(
+            executor, self._on_individual_shot_finished_callback
         )
 
         # Set executor finished callbacks

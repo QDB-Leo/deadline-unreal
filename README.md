@@ -104,6 +104,8 @@ Everything else is the same as in the editor: the RPC with Deadline (tasks, prog
 
 One difference the plugin makes up for: the in-process executor ignores a render that ends unsuccessfully (a pipeline error shuts it down early) and finishes as if it had succeeded. `deadline_progress_executor.py` binds the pipeline's end and reports it as an error of the executor, so the task fails as it does in the editor. A cancel doesn't exist in `-game` (no UI): Unreal quitting mid-render fails the task like any process exit.
 
+Another one: the project's Level Variant Sets are loaded before the executor opens the job's map, and kept loaded during the render (`keep_level_variant_sets_loaded`, `mrq_cli_modes/utils.py`). One that loads compiles its director Blueprint, which asserts on the current world (`Assertion failed: EditorWorld`, `LevelVariantSets.cpp`): in `-game` there is none while the map opens, and Unreal crashes when the level's Level Variant Sets load then.
+
 `GameMode` is false by default: new Deadline job presets get it in their Plugin Info set to `false`, submission sends `false` when the preset doesn't have it, and the Monitor shows it as **Game Mode** in the UnrealEngine5 settings. To render a project or a job in `-game`, set it to `true` in the job preset's Plugin Info, or for one job in the Monitor's job properties (before its task starts).
 
 The worker code that the editor and `-game` share only uses what both have: the editor-only classes (`MoviePipelineQueueSubsystem`, `MoviePipelinePIEExecutor`, `MovieRenderPipelineProjectSettings`) are only read when they exist (`mrq_cli_modes/utils.py`, `deadline_progress_executor.py`).

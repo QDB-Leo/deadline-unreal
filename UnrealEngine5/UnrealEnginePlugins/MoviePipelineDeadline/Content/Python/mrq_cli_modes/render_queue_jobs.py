@@ -13,7 +13,8 @@ from .utils import (
     apply_graph_output_overrides,
     apply_frame_range_override,
     apply_render_settings,
-    keep_graphs_loaded
+    keep_graphs_loaded,
+    keep_level_variant_sets_loaded
 )
 
 
@@ -104,6 +105,7 @@ def render_jobs(
             apply_frame_range_override(job, *frame_range_override)
 
     keep_graphs_loaded(movie_pipeline_queue.get_jobs())
+    keep_level_variant_sets_loaded()
 
     if is_remote:
         setup_remote_render_jobs(

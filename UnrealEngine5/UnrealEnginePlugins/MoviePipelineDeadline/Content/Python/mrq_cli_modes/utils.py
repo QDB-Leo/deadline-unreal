@@ -1,5 +1,6 @@
 # Copyright Epic Games, Inc. All Rights Reserved
 
+import time
 import unreal
 
 from collections import namedtuple
@@ -38,6 +39,40 @@ def keep_graphs_loaded(jobs):
         if graph:
             graphs += [graph] + list(graph.get_all_contained_subgraphs())
     _graphs_in_render = graphs
+
+
+# -game: the project's Level Variant Sets, loaded before the executor opens the job's
+# map and referenced here until the next render (see keep_level_variant_sets_loaded)
+_level_variant_sets_in_render = []
+
+
+def keep_level_variant_sets_loaded():
+    """
+    -game: load the project's Level Variant Sets before the executor opens the job's
+    map, and keep them loaded. A Level Variant Sets asset that loads compiles its
+    director Blueprint, which looks for the current world and asserts on it
+    (VariantManagerContent, LevelVariantSets.cpp, "Assertion failed: EditorWorld").
+    In -game the only world is the game one, and it has none while the map opens:
+    loaded then, the asset crashes Unreal. Loaded now, the entry map is the world.
+    All of them, not the map's dependencies: the Level Variant Sets actor only has a
+    soft path to its asset. The editor always has its world: nothing to do there.
+    """
+    global _level_variant_sets_in_render
+    if pipeline_subsystem is not None or not hasattr(unreal, "LevelVariantSets"):
+        return
+
+    start = time.time()
+    asset_registry = unreal.AssetRegistryHelpers.get_asset_registry()
+    # -game doesn't scan the project at startup
+    asset_registry.search_all_assets(True)
+    assets = asset_registry.get_assets_by_class(
+        unreal.TopLevelAssetPath("/Script/VariantManagerContent", "LevelVariantSets")
+    )
+    _level_variant_sets_in_render = [asset.get_asset() for asset in assets]
+    unreal.log(
+        f"Level Variant Sets loaded before the map opens (-game): "
+        f"{len(_level_variant_sets_in_render)} in {time.time() - start:.1f}s"
+    )
 
 
 def get_project_settings():

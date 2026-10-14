@@ -47,6 +47,16 @@ Required=false
 DisableIfBlank=false
 Default=true
 
+[PreloadMap]
+Type=boolean
+Label=Preload Map
+Category=Project
+Index=3
+Description=Open the job's map in the editor before the render, for maps whose meshes or textures don't finish loading otherwise. The render then uses the editor's copy of the map, with what editor-side logic changed in it after loading. Off (default), the render loads the map from disk itself
+Required=false
+DisableIfBlank=false
+Default=false
+
 [ProgressRegex]
 Type=string
 Label=Progress Regular Expression
